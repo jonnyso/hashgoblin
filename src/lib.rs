@@ -195,7 +195,7 @@ impl OutFile {
         hasher: &mut dyn DynDigest,
         cancel: &AtomicBool,
     ) -> Result<(), Error> {
-        let hashed = match hash_file(&path, hasher, cancel) {
+        let hashed = match hash_file(path, hasher, cancel) {
             Ok(Hashed::Value(value)) => value,
             Ok(Hashed::Canceled) => return Ok(()),
             Err(err) => return Err(Error::Io((err, path.to_string_lossy().to_string()))),
@@ -224,13 +224,13 @@ fn run(
     cancel: &AtomicBool,
 ) -> Result<(), Error> {
     let mut path = Some(path);
-    let mut hasher = new_hasher(&hash);
+    let mut hasher = new_hasher(hash);
     while let Some(path) = path.take().or_else(|| queue.pop_front()) {
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
         if path.is_dir() {
-            cancel_on_err(queue.push_dir(&path, &cancel), cancel)?;
+            cancel_on_err(queue.push_dir(&path, cancel), cancel)?;
         } else {
             cancel_on_err(writer.write_line(&path, &mut *hasher, cancel), cancel)?;
         }
@@ -388,11 +388,17 @@ pub fn audit(path: Option<PathBuf>, max_threads: u8, early: bool) -> Result<(), 
         for _ in 0..max_threads {
             handles.push(s.spawn(|| check(&lines, &hash, early, &cancel)));
         }
-        let mut handles = handles.into_iter().map(|handle| handle.join().unwrap());
-        if let Some(result) = handles.find(|result| result.is_err()) {
-            return Err(result.unwrap_err());
+        let handles = handles.into_iter().map(|handle| handle.join().unwrap());
+        let mut audit_failed = false;
+        for handle in handles {
+            if handle.is_err() {
+                return Err(handle.unwrap_err());
+            }
+            if handle.unwrap() {
+                audit_failed = true;
+            }
         }
-        if !handles.any(|result| result.unwrap()) {
+        if !audit_failed {
             println!("ok");
         }
         Ok(())
