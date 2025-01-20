@@ -10,7 +10,6 @@ use std::{
         Mutex,
     },
     thread::{self, ScopedJoinHandle},
-    time::Duration,
 };
 
 use digest::DynDigest;
@@ -216,16 +215,9 @@ fn cancel_on_err<T, E>(result: Result<T, E>, cancel: &AtomicBool) -> Result<T, E
     result
 }
 
-fn run(
-    path: PathBuf,
-    hash: &Hash,
-    queue: &Queue,
-    writer: &OutFile,
-    cancel: &AtomicBool,
-) -> Result<(), Error> {
-    let mut path = Some(path);
+fn run(hash: &Hash, queue: &Queue, writer: &OutFile, cancel: &AtomicBool) -> Result<(), Error> {
     let mut hasher = new_hasher(hash);
-    while let Some(path) = path.take().or_else(|| queue.pop_front()) {
+    while let Some(path) = queue.pop_front() {
         if cancel.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -238,7 +230,7 @@ fn run(
     Ok(())
 }
 
-fn err_cleanup(
+fn cleanup_on_err(
     handles: Vec<ScopedJoinHandle<Result<(), Error>>>,
     output: Option<PathBuf>,
 ) -> Result<(), Error> {
@@ -265,30 +257,11 @@ pub fn create_hashes(
     let writer = OutFile::new(output.as_deref(), &hash)?;
     let cancel = AtomicBool::new(false);
     thread::scope(|s| -> Result<(), Error> {
-        let max_threads = max_threads - 1;
         let mut handles = Vec::with_capacity(max_threads as usize);
-        let mut hasher = new_hasher(&hash);
-        loop {
-            while let Some(path) = queue.pop_front() {
-                if cancel.load(Ordering::Acquire) {
-                    return err_cleanup(handles, output);
-                }
-                if handles.len() < max_threads as usize {
-                    handles.push(s.spawn(|| run(path, &hash, &queue, &writer, &cancel)));
-                    continue;
-                }
-                if path.is_dir() {
-                    queue.push_dir(&path, &cancel)?;
-                } else {
-                    writer.write_line(&path, &mut *hasher, &cancel)?;
-                }
-            }
-            if handles.iter().all(|handle| handle.is_finished()) {
-                return Ok(());
-            } else {
-                thread::sleep(Duration::from_millis(500));
-            }
+        while handles.len() < max_threads as usize {
+            handles.push(s.spawn(|| run(&hash, &queue, &writer, &cancel)));
         }
+        cleanup_on_err(handles, output)
     })
 }
 
