@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gumdrop::Options;
-use hashgoblin::{audit, create_hashes, Error, Hash};
+use hashgoblin::{create, Error, Hash};
 
 #[derive(Options)]
 struct Args {
@@ -26,6 +26,7 @@ struct CreateOpts {
     hash: Option<Hash>,
     #[options(help = "generate hashes recursevely")]
     recursive: bool,
+    // #[options(help = "path to the output file, default: ./hashes.txt")]
     #[options(help = "path to the output file, default: ./hashes.txt")]
     output: Option<PathBuf>,
 }
@@ -57,15 +58,17 @@ enum Command {
 fn main() -> Result<(), Error> {
     let args = Args::parse_args_default_or_exit();
     match args.command {
-        Some(Command::Create(opts)) => create_hashes(
+        Some(Command::Create(opts)) => create(
             &opts.source,
             opts.recursive,
             args.max_threads.unwrap_or(5),
             opts.hash.unwrap_or(Hash::SHA256),
             opts.output,
         ),
+        #[allow(unused_variables)]
         Some(Command::Audit(opts)) => {
-            audit(opts.hashes_file, args.max_threads.unwrap_or(5), opts.early)
+            // audit(opts.hashes_file, args.max_threads.unwrap_or(5), opts.early)
+            todo!()
         }
         None => {
             println!("You must specify a command, use --help [COMMAND] for more information\n");
