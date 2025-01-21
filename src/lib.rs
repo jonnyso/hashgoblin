@@ -16,7 +16,8 @@ pub fn create(
     max_threads: u8,
     hash: Hash,
     output: Option<PathBuf>,
+    empty_dirs: bool,
 ) -> Result<(), Error> {
     let outfile = OutFile::new(output, &hash)?;
-    exec::create_hashes(input, recursive, max_threads, hash, outfile)
+    exec::create_hashes(input, recursive, max_threads, hash, empty_dirs, outfile)
 }

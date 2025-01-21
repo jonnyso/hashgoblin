@@ -9,6 +9,10 @@ struct Args {
     help: bool,
     #[options(help = "maxim number of threads the program may sapwn, DEFAULT: 5")]
     max_threads: Option<u8>,
+    #[options(
+        help = "unless this option is present, empty directories will be ignored by default"
+    )]
+    empty_dirs: bool,
     #[options(command)]
     command: Option<Command>,
 }
@@ -64,6 +68,7 @@ fn main() -> Result<(), Error> {
             args.max_threads.unwrap_or(5),
             opts.hash.unwrap_or(Hash::SHA256),
             opts.output,
+            args.empty_dirs,
         ),
         #[allow(unused_variables)]
         Some(Command::Audit(opts)) => {
