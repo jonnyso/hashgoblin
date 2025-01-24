@@ -4,12 +4,13 @@ use std::{
     io::{self, BufRead, BufReader},
     path::Path,
     str::FromStr,
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use digest::DynDigest;
 
-pub enum Hash {
+use crate::exec::is_canceled;
+
+pub enum HashType {
     MD5,
     SHA256,
     SHA1,
@@ -17,16 +18,16 @@ pub enum Hash {
     Whirlpool,
 }
 
-impl FromStr for Hash {
+impl FromStr for HashType {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "md5" => Ok(Hash::MD5),
-            "sha1" => Ok(Hash::SHA1),
-            "sha256" => Ok(Hash::SHA256),
-            "tiger" => Ok(Hash::Tiger),
-            "whirlpool" => Ok(Hash::Whirlpool),
+            "md5" => Ok(HashType::MD5),
+            "sha1" => Ok(HashType::SHA1),
+            "sha256" => Ok(HashType::SHA256),
+            "tiger" => Ok(HashType::Tiger),
+            "whirlpool" => Ok(HashType::Whirlpool),
             _ => Err(format!(
                 "invalid hash: {s}, possible options are: sha256, tiger, whirlpool, sha1, md5"
             )),
@@ -34,29 +35,29 @@ impl FromStr for Hash {
     }
 }
 
-impl Display for Hash {
+impl Display for HashType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
             match self {
-                Hash::MD5 => "md5",
-                Hash::SHA256 => "sha256",
-                Hash::SHA1 => "sha1",
-                Hash::Tiger => "tiger",
-                Hash::Whirlpool => "whirlpool",
+                HashType::MD5 => "md5",
+                HashType::SHA256 => "sha256",
+                HashType::SHA1 => "sha1",
+                HashType::Tiger => "tiger",
+                HashType::Whirlpool => "whirlpool",
             }
         )
     }
 }
 
-pub fn new_hasher(hash: &Hash) -> Box<dyn DynDigest> {
+pub fn new_hasher(hash: &HashType) -> Box<dyn DynDigest> {
     match hash {
-        Hash::MD5 => Box::new(md5::Md5::default()),
-        Hash::SHA256 => Box::new(sha2::Sha256::default()),
-        Hash::SHA1 => Box::new(sha1::Sha1::default()),
-        Hash::Tiger => Box::new(tiger::Tiger::default()),
-        Hash::Whirlpool => Box::new(whirlpool::Whirlpool::default()),
+        HashType::MD5 => Box::new(md5::Md5::default()),
+        HashType::SHA256 => Box::new(sha2::Sha256::default()),
+        HashType::SHA1 => Box::new(sha1::Sha1::default()),
+        HashType::Tiger => Box::new(tiger::Tiger::default()),
+        HashType::Whirlpool => Box::new(whirlpool::Whirlpool::default()),
     }
 }
 
@@ -65,14 +66,10 @@ pub enum Hashed {
     Canceled,
 }
 
-pub fn hash_file(
-    path: &Path,
-    hasher: &mut dyn DynDigest,
-    cancel: &AtomicBool,
-) -> io::Result<Hashed> {
+pub fn hash_file(path: &Path, hasher: &mut dyn DynDigest) -> io::Result<Hashed> {
     let mut reader = BufReader::new(File::open(path)?);
     loop {
-        if cancel.load(Ordering::Acquire) {
+        if is_canceled() {
             return Ok(Hashed::Canceled);
         }
         let data = reader.fill_buf()?;

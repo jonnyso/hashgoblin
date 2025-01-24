@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gumdrop::Options;
-use hashgoblin::{create, Error, Hash};
+use hashgoblin::{audit, create, Error, HashType};
 
 #[derive(Options)]
 struct Args {
@@ -9,6 +9,8 @@ struct Args {
     help: bool,
     #[options(help = "maxim number of threads the program may sapwn, DEFAULT: 5")]
     max_threads: Option<u8>,
+    #[options(help = "generate hashes recursevely")]
+    recursive: bool,
     #[options(
         help = "unless this option is present, empty directories will be ignored by default"
     )]
@@ -25,21 +27,24 @@ struct CreateOpts {
     )]
     source: Vec<String>,
     #[options(
-        help = "hash algorithm, suported: sha256, tiger, whirlpool, sha1, md5, default: sha256"
+        help = "hash algorithm, suported: sha256, tiger, whirlpool, sha1, md5, default: sha256",
+        short = "H"
     )]
-    hash: Option<Hash>,
-    #[options(help = "generate hashes recursevely")]
-    recursive: bool,
-    // #[options(help = "path to the output file, default: ./hashes.txt")]
+    hash: Option<HashType>,
     #[options(help = "path to the output file, default: ./hashes.txt")]
     output: Option<PathBuf>,
 }
 
 #[derive(Options)]
 struct AuditOpts {
-    #[options(help = "exit early on the first audit mismatch")]
+    #[options(
+        free,
+        help = "source file or directory. If it is a directory, recursive option must also be enabled"
+    )]
+    source: Vec<String>,
+    #[options(help = "exit early on the first audit mismatch", short = "E")]
     early: bool,
-    #[options(help = "path to the hashes file, default ./hashes.txt")]
+    #[options(help = "path to the hashes file, default ./hashes.txt", short = "f")]
     hashes_file: Option<PathBuf>,
 }
 
@@ -64,17 +69,21 @@ fn main() -> Result<(), Error> {
     match args.command {
         Some(Command::Create(opts)) => create(
             &opts.source,
-            opts.recursive,
+            args.recursive,
             args.max_threads.unwrap_or(5),
-            opts.hash.unwrap_or(Hash::SHA256),
+            opts.hash.unwrap_or(HashType::SHA256),
             opts.output,
             args.empty_dirs,
         ),
         #[allow(unused_variables)]
-        Some(Command::Audit(opts)) => {
-            // audit(opts.hashes_file, args.max_threads.unwrap_or(5), opts.early)
-            todo!()
-        }
+        Some(Command::Audit(opts)) => audit(
+            &opts.source,
+            args.recursive,
+            args.max_threads.unwrap_or(5),
+            opts.hashes_file,
+            opts.early,
+            args.empty_dirs,
+        ),
         None => {
             println!("You must specify a command, use --help [COMMAND] for more information\n");
             println!("{}\n", args.self_usage());

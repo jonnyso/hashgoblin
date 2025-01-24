@@ -10,6 +10,7 @@ pub enum Error {
     FileFormat,
     InvalidHash(String),
     ReadLine(io::Error),
+    AuditEmptyDir(String),
 }
 
 impl Debug for Error {
@@ -32,6 +33,10 @@ impl Display for Error {
             Self::FileFormat => write!(f, "invalid hashes file format"),
             Self::InvalidHash(value) => write!(f, "{value}"),
             Self::ReadLine(error) => write!(f, "failed to read hashes file: {error}"),
+            Self::AuditEmptyDir(path) => write!(
+                f,
+                "empty directory: {path}\n - Because the hashes file was created with `empty-dirs` option enabled, this option must also be enabled when auditing"
+            ),
         }
     }
 }
