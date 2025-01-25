@@ -45,12 +45,15 @@ impl AuditError {
     }
 }
 
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
 type HashesFile = Lines<BufReader<File>>;
 
 fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Error> {
     let path = path.unwrap_or(PathBuf::from(DEFAULT_OUT));
-    let file =
-        File::open(&path).map_err(|err| Error::Io((err, path.to_string_lossy().to_string())))?;
+    let file = File::open(&path).map_err(|err| Error::Io((err, path_string(&path))))?;
     let mut lines = BufReader::new(file).lines();
     match lines.next() {
         None => return Err(Error::FileFormat),
@@ -89,23 +92,19 @@ fn compare_paths(reader_path: &Path, path: &Path) -> Result<(), ComparedPath> {
     }
     match (reader_path.is_dir(), path.is_dir()) {
         (true, false) => match path.ancestors().nth(1) {
-            Some(ancestor) if ancestor == reader_path => Err(ComparedPath::Audit(
-                AuditError::Extra(path.to_string_lossy().to_string()),
-            )),
+            Some(ancestor) if ancestor == reader_path => {
+                Err(ComparedPath::Audit(AuditError::Extra(path_string(path))))
+            }
             _ => Err(ComparedPath::Unrelated),
         },
         (false, true) => match reader_path.ancestors().nth(1) {
-            Some(ancestor) if ancestor == path => Err(ComparedPath::Audit(AuditError::EmptyDir(
-                path.to_string_lossy().to_string(),
-            ))),
+            Some(ancestor) if ancestor == path => {
+                Err(ComparedPath::Audit(AuditError::EmptyDir(path_string(path))))
+            }
             _ => Err(ComparedPath::Unrelated),
         },
         _ => Err(ComparedPath::Unrelated),
     }
-}
-
-fn path_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
 }
 
 enum ReaderErr {
