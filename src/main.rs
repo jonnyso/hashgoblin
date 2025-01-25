@@ -75,7 +75,6 @@ fn main() -> Result<(), Error> {
             opts.output,
             args.empty_dirs,
         ),
-        #[allow(unused_variables)]
         Some(Command::Audit(opts)) => audit(
             &opts.source,
             args.recursive,
