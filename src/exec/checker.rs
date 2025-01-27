@@ -12,7 +12,7 @@ use std::{
 
 use crate::{exec::cancel, Error, HashType, DEFAULT_OUT};
 
-use super::{cancel_on_err, is_canceled, HashData, HashHandler};
+use super::{cancel_on_err, is_canceled, path_string, HashData, HashHandler};
 
 enum AuditError {
     NotFound(String),
@@ -43,10 +43,6 @@ impl AuditError {
             cancel();
         }
     }
-}
-
-fn path_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
 }
 
 type HashesFile = Lines<BufReader<File>>;

@@ -13,6 +13,9 @@ use std::{
     },
 };
 
+pub use checker::AuditSrc;
+pub use outfile::OutFile;
+
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub fn cancel() {
@@ -23,8 +26,9 @@ pub fn is_canceled() -> bool {
     CANCEL.load(Ordering::Acquire)
 }
 
-pub use checker::AuditSrc;
-pub use outfile::OutFile;
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
 
 pub struct HashData(PathBuf, Option<String>);
 
@@ -45,7 +49,7 @@ impl HashData {
         let path = PathBuf::from(path);
         match (hash.is_empty(), empty_dirs) {
             (true, true) => Ok(Self(path, None)),
-            (true, false) => Err(Error::AuditEmptyDir(path.to_string_lossy().to_string())),
+            (true, false) => Err(Error::AuditEmptyDir(path_string(&path))),
             (false, _) => Ok(Self(path, Some(hash.to_owned()))),
         }
     }
@@ -75,7 +79,7 @@ pub fn run<T: HashHandler>(
             let hash = match hashing::hash_file(&path, &mut *hasher) {
                 Ok(Hashed::Value(value)) => Ok(value),
                 Ok(Hashed::Canceled) => return Ok(()),
-                Err(err) => Err(Error::Io((err, path.to_string_lossy().to_string()))),
+                Err(err) => Err(Error::Io((err, path_string(&path)))),
             };
             let hash = cancel_on_err(hash)?;
             cancel_on_err(handler.handle(HashData(path, Some(hash))))?;
@@ -120,7 +124,7 @@ impl Queue {
         let mut queue = self.0.lock().unwrap();
         let reader = path
             .read_dir()
-            .map_err(|err| Error::Io((err, path.to_string_lossy().to_string())))?;
+            .map_err(|err| Error::Io((err, path_string(path))))?;
         for entry in reader {
             is_empty = false;
             if is_canceled() {
@@ -128,7 +132,7 @@ impl Queue {
             }
             queue.push_back(
                 entry
-                    .map_err(|err| Error::Io((err, path.to_string_lossy().to_string())))?
+                    .map_err(|err| Error::Io((err, path_string(path))))?
                     .path(),
             );
         }
