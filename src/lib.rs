@@ -1,7 +1,7 @@
 mod error;
 mod exec;
 mod hashing;
-mod path;
+pub mod path;
 
 use exec::{run, AuditSrc, OutFile, Queue};
 use std::{fs, path::PathBuf, thread};
