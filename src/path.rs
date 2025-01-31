@@ -110,10 +110,27 @@ mod linux_path {
         Io(io::Error),
     }
 
+    // /dev/sda -> sda
+    // /dev/nvme0n1p3[/subovol] -> nvme0n1
+    fn extract_device_name(mut name: String) -> String {
+        if let Some(index) = name.rfind('[') {
+            name.truncate(index);
+        }
+        if let Some(index) = name.rfind('/') {
+            name = name.split_off(index + 1);
+        }
+        if name.starts_with("nvme") {
+            if let Some(index) = name.rfind('p') {
+                name.truncate(index);
+            }
+        }
+        name
+    }
+
     pub fn find_volume_name(path: &Path) -> Result<String, Error> {
         let path = path.canonicalize().map_err(Error::Io)?;
         let mut output = Command::new("findmnt")
-            .args(["-no", "source", "-T", path.to_str().unwrap_or("./")])
+            .args(["-no", "source", "-T", path.to_str().expect("invalid path")])
             .output()
             .map_err(Error::Io)?;
         if !output.stderr.is_empty() {
@@ -123,11 +140,12 @@ mod linux_path {
             ));
         }
         output.stdout.pop(); //removing line break
-        Ok(String::from_utf8(output.stdout).expect("expected volume name to be utf-8"))
+        Ok(extract_device_name(
+            String::from_utf8(output.stdout).expect("expected volume name to be utf-8"),
+        ))
     }
 
     pub fn is_rotational(volume: String) -> Result<bool, io::Error> {
-        let volume = volume.strip_prefix("/dev/").unwrap_or(&volume);
         let mut path = PathBuf::from("/sys/block");
         path.push(volume);
         path.push("queue/rotational");
