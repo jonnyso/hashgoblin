@@ -1,9 +1,17 @@
-use std::path::Path;
+use std::{fmt::Debug, io, path::Path};
+
+#[derive(Debug)]
+pub enum Error<T: Debug> {
+    Platform(T),
+    Io(io::Error),
+    PathToStr,
+    Utf8,
+}
 
 #[cfg(target_os = "windows")]
 mod windows_path {
+    use super::Error;
     use std::fs::File;
-    use std::io;
     use std::mem::MaybeUninit;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
     use std::path::Path;
@@ -22,13 +30,7 @@ mod windows_path {
     };
     use windows_sys::Win32::System::IO::DeviceIoControl;
 
-    #[derive(Debug)]
-    pub enum Error {
-        Win32(WIN32_ERROR),
-        Io(io::Error),
-    }
-
-    pub fn get_volume_handle(path: &Path) -> Result<File, Error> {
+    pub fn get_volume_handle(path: &Path) -> Result<File, Error<WIN32_ERROR>> {
         let s_path: Vec<u16> = path
             .canonicalize()
             .map_err(Error::Io)?
@@ -38,7 +40,7 @@ mod windows_path {
             .collect();
         let mut buf = [0u16; MAX_PATH as usize];
         if unsafe { GetVolumePathNameW(s_path.as_ptr(), buf.as_mut_ptr(), MAX_PATH) } == 0 {
-            return Err(Error::Win32(unsafe { GetLastError() }));
+            return Err(Error::Platform(unsafe { GetLastError() }));
         }
         if let Some(c) = buf.iter_mut().rfind(|c| **c != 0) {
             if *c == b'\\'.into() {
@@ -57,7 +59,7 @@ mod windows_path {
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            return Err(Error::Win32(unsafe { GetLastError() }));
+            return Err(Error::Platform(unsafe { GetLastError() }));
         }
         Ok(unsafe { File::from_raw_handle(handle as RawHandle) })
     }
@@ -94,6 +96,7 @@ mod windows_path {
 
 #[cfg(target_os = "linux")]
 mod linux_path {
+    use super::Error;
     use core::panic;
     use std::{
         ffi::OsString,
@@ -101,14 +104,8 @@ mod linux_path {
         io::{self, Read},
         os::unix::ffi::OsStringExt,
         path::{Path, PathBuf},
-        process::{Command, ExitStatus},
+        process::Command,
     };
-
-    #[derive(Debug)]
-    pub enum Error {
-        Command(ExitStatus, OsString),
-        Io(io::Error),
-    }
 
     // /dev/sda -> sda
     // /dev/nvme0n1p3[/subovol] -> nvme0n1
@@ -127,21 +124,23 @@ mod linux_path {
         name
     }
 
-    pub fn find_volume_name(path: &Path) -> Result<String, Error> {
+    pub fn find_volume_name(path: &Path) -> Result<String, Error<OsString>> {
         let path = path.canonicalize().map_err(Error::Io)?;
         let mut output = Command::new("findmnt")
-            .args(["-no", "source", "-T", path.to_str().expect("invalid path")])
+            .args([
+                "-no",
+                "source",
+                "-T",
+                path.to_str().ok_or(Error::PathToStr)?,
+            ])
             .output()
             .map_err(Error::Io)?;
         if !output.stderr.is_empty() {
-            return Err(Error::Command(
-                output.status,
-                OsString::from_vec(output.stderr),
-            ));
+            return Err(Error::Platform(OsString::from_vec(output.stderr)));
         }
         output.stdout.pop(); //removing line break
         Ok(extract_device_name(
-            String::from_utf8(output.stdout).expect("expected volume name to be utf-8"),
+            String::from_utf8(output.stdout).map_err(|_| Error::Utf8)?,
         ))
     }
 
@@ -160,16 +159,20 @@ mod linux_path {
     }
 }
 
-pub fn path_on_fast_drive(path: &Path) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        let volume = linux_path::find_volume_name(path).unwrap();
-        !linux_path::is_rotational(volume).unwrap()
-    }
+#[cfg(target_os = "linux")]
+pub fn path_on_fast_drive(path: &Path) -> Result<bool, Error<std::ffi::OsString>> {
+    let volume = linux_path::find_volume_name(path)?;
+    linux_path::is_rotational(volume)
+        .map(|rotational| !rotational)
+        .map_err(Error::Io)
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        let handle = windows_path::get_volume_handle(path).unwrap();
-        !windows_path::drive_incurs_penalty(&handle).unwrap()
-    }
+#[cfg(target_os = "windows")]
+pub fn path_on_fast_drive(
+    path: &Path,
+) -> Result<bool, Error<windows_sys::Win32::Foundation::WIN32_ERROR>> {
+    let handle = windows_path::get_volume_handle(path)?;
+    windows_path::drive_incurs_penalty(&handle)
+        .map(|incurs| !incurs)
+        .map_err(Error::Platform)
 }

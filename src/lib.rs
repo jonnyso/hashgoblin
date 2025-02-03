@@ -1,15 +1,42 @@
 mod error;
 mod exec;
 mod hashing;
-pub mod path;
+mod path;
 
 use exec::{run, AuditSrc, OutFile, Queue};
-use std::{fs, path::PathBuf, thread};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    thread,
+};
 
 pub use error::Error;
 pub use hashing::HashType;
 
 const DEFAULT_OUT: &str = "./hashes.txt";
+
+enum SourceReader {
+    Multithread,
+    Singlethread,
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn get_reader(path: &Path) -> SourceReader {
+    SourceReader::Singlethread
+}
+
+fn get_reader(path: &Path) -> SourceReader {
+    match path::path_on_fast_drive(path) {
+        Ok(true) => SourceReader::Multithread,
+        Ok(false) => SourceReader::Singlethread,
+        Err(_) => {
+            eprintln!(
+                "WARNING: Could not detect if drive is an HDD, defaulting to Multithread reader"
+            );
+            SourceReader::Multithread
+        }
+    }
+}
 
 pub fn create(
     input: &[String],
