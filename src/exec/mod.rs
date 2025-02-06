@@ -1,9 +1,17 @@
 mod checker;
+mod mtreader;
 mod outfile;
+mod streader;
+
+const BUF_SIZE: usize = 36 * 1024;
+const HANDLE_BUF_SIZE: usize = 8 * 1024;
 
 use crate::hashing::{self, HashType, Hashed};
+use crate::path::{path_on_fast_drive, PathList};
 use crate::Error;
 use std::fmt::Display;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -14,7 +22,9 @@ use std::{
 };
 
 pub use checker::AuditSrc;
+pub use mtreader::MTReader;
 pub use outfile::OutFile;
+pub use streader::{STReader, STReaderHandle};
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
@@ -59,32 +69,67 @@ pub trait HashHandler {
     fn handle(&self, hash_data: HashData) -> Result<(), Error>;
 }
 
-pub fn run<T: HashHandler>(
+enum ReadData {
+    EmptyDir(PathBuf),
+    File(Option<[u8; HANDLE_BUF_SIZE]>),
+}
+
+trait ExecReaderHandle {
+    fn try_read(&mut self) -> Result<Option<ReadData>, Error>;
+}
+
+trait ExecReader {
+    fn get_handle(&self) -> Option<impl ExecReaderHandle>;
+}
+
+pub enum ReaderType {
+    MT(MTReader),
+    ST(Mutex<STReader>),
+}
+
+struct ReaderQueue(VecDeque<ReaderType>);
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl ReaderQueue {
+    fn new(paths: Vec<PathBuf>, max_threads: u8) -> Result<Self, ()> {
+        let path_list = match path_on_fast_drive(paths) {
+            Ok(paths) => paths,
+            Err(_) => return Err(()),
+        };
+        let path_list = path_list.into_iter().map(|pl| match pl {
+            PathList::SSD(list) => ReaderType::MT(MTReader::new(list)),
+            PathList::HDD(list) => ReaderType::ST(Mutex::new(STReader::new(list, max_threads))),
+        });
+        Ok(Self(VecDeque::from_iter(path_list)))
+    }
+}
+
+pub fn run<T: HashHandler, R: ExecReaderHandle>(
     hash: &HashType,
-    queue: &Queue,
+    reader: R,
     empty_dirs: bool,
     handler: &T,
 ) -> Result<(), Error> {
-    let mut hasher = hashing::new_hasher(hash);
-    while let Some(path) = queue.pop_front() {
-        if is_canceled() {
-            return Ok(());
-        }
-        if path.is_dir() {
-            let is_empty = cancel_on_err(queue.push_dir(&path))?;
-            if is_empty && empty_dirs {
-                cancel_on_err(handler.handle(HashData(path, None)))?;
-            }
-        } else {
-            let hash = match hashing::hash_file(&path, &mut *hasher) {
-                Ok(Hashed::Value(value)) => Ok(value),
-                Ok(Hashed::Canceled) => return Ok(()),
-                Err(err) => Err(Error::Io((err, path_string(&path)))),
-            };
-            let hash = cancel_on_err(hash)?;
-            cancel_on_err(handler.handle(HashData(path, Some(hash))))?;
-        }
-    }
+    // let mut hasher = hashing::new_hasher(hash);
+    // while let Some(path) = queue.pop_front() {
+    //     if is_canceled() {
+    //         return Ok(());
+    //     }
+    //     if path.is_dir() {
+    //         let is_empty = cancel_on_err(queue.push_dir(&path))?;
+    //         if is_empty && empty_dirs {
+    //             cancel_on_err(handler.handle(HashData(path, None)))?;
+    //         }
+    //     } else {
+    //         let hash = match hashing::hash_file(&path, &mut *hasher) {
+    //             Ok(Hashed::Value(value)) => Ok(value),
+    //             Ok(Hashed::Canceled) => return Ok(()),
+    //             Err(err) => Err(Error::Io((err, path_string(&path)))),
+    //         };
+    //         let hash = cancel_on_err(hash)?;
+    //         cancel_on_err(handler.handle(HashData(path, Some(hash))))?;
+    //     }
+    // }
     Ok(())
 }
 
@@ -95,47 +140,14 @@ fn cancel_on_err<T, E>(result: Result<T, E>) -> Result<T, E> {
     result
 }
 
-pub struct Queue(Mutex<VecDeque<PathBuf>>);
-
-impl Queue {
-    pub fn new(input: &[String], recursive: bool) -> Result<Self, Error> {
-        let mut queue = VecDeque::with_capacity(input.len());
-        for path in input {
-            let pathbuf = PathBuf::from(path);
-            if pathbuf
-                .metadata()
-                .map_err(|err| Error::Io((err, path.to_owned())))?
-                .is_dir()
-                && !recursive
-            {
-                return Err(Error::IsDir(path.to_owned()));
-            }
-            queue.push_back(pathbuf);
-        }
-        Ok(Self(Mutex::new(queue)))
+fn push_dir(dir: &Path, queue: &mut VecDeque<PathBuf>) -> Result<bool, Error> {
+    let mut is_empty = true;
+    let entries =
+        cancel_on_err(dir.read_dir()).map_err(|err| Error::Io((err, path_string(dir))))?;
+    for entry in entries {
+        is_empty = false;
+        let entry = cancel_on_err(entry).map_err(|err| Error::Io((err, path_string(dir))))?;
+        queue.push_back(entry.path());
     }
-
-    fn pop_front(&self) -> Option<PathBuf> {
-        self.0.lock().unwrap().pop_front()
-    }
-
-    fn push_dir(&self, path: &Path) -> Result<bool, Error> {
-        let mut is_empty = true;
-        let mut queue = self.0.lock().unwrap();
-        let reader = path
-            .read_dir()
-            .map_err(|err| Error::Io((err, path_string(path))))?;
-        for entry in reader {
-            is_empty = false;
-            if is_canceled() {
-                return Ok(is_empty);
-            }
-            queue.push_back(
-                entry
-                    .map_err(|err| Error::Io((err, path_string(path))))?
-                    .path(),
-            );
-        }
-        Ok(is_empty)
-    }
+    Ok(is_empty)
 }
