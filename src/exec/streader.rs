@@ -9,7 +9,8 @@ use std::{
 use crate::Error;
 
 use super::{
-    cancel_on_err, path_string, push_dir, ExecReaderHandle, ReadData, BUF_SIZE, HANDLE_BUF_SIZE,
+    cancel_on_err, path_string, push_dir, ExecReader, ExecReaderHandle, ReadData, BUF_SIZE,
+    HANDLE_BUF_SIZE,
 };
 
 enum NewReader {
@@ -38,6 +39,7 @@ impl STReader {
                 if push_dir(&path, &mut self.paths)? {
                     return Ok(Some(NewReader::EmptyDir(path)));
                 }
+                continue;
             }
             let file = cancel_on_err(File::open(&path))
                 .map_err(|err| Error::Io((err, path_string(&path))))?;
@@ -47,36 +49,23 @@ impl STReader {
         Ok(None)
     }
 
-    fn read_buf(&mut self, index: usize) -> Result<Option<ReadData>, Error> {
-        loop {
-            break match self.readers[index].as_mut() {
-                Some((path, reader)) => {
-                    let mut buf = [0; HANDLE_BUF_SIZE];
-                    let byte_count = cancel_on_err(reader.read(&mut buf))
-                        .map_err(|err| Error::Io((err, path_string(&path))))?;
-                    if byte_count == 0 {
-                        self.readers[index] = None;
-                        Ok(None)
-                    } else {
-                        Ok(Some(ReadData::File(Some(buf))))
-                    }
-                }
-                None => match self.get_new_reader()? {
-                    Some(NewReader::EmptyDir(path)) => Ok(Some(ReadData::EmptyDir(path))),
-                    Some(NewReader::File(path, reader)) => {
-                        self.readers[index] = Some((path, reader));
-                        continue;
-                    }
-                    None => Ok(None),
-                },
-            };
-        }
+    fn at_mut(&mut self, index: usize) -> Option<&mut ReaderItem> {
+        self.readers[index].as_mut()
+    }
+
+    fn set_at(&mut self, index: usize, value: Option<ReaderItem>) {
+        self.readers[index] = value;
+    }
+
+    fn take_at(&mut self, index: usize) -> Option<ReaderItem> {
+        self.readers[index].take()
     }
 }
 
 pub struct STReaderHandle<'a> {
     index: usize,
     inner: &'a Mutex<STReader>,
+    buf: [u8; HANDLE_BUF_SIZE],
 }
 
 impl<'a> STReaderHandle<'a> {
@@ -89,13 +78,41 @@ impl<'a> STReaderHandle<'a> {
         Self {
             index,
             inner: streader,
+            buf: [0; HANDLE_BUF_SIZE],
         }
     }
 }
 
 impl ExecReaderHandle for STReaderHandle<'_> {
     fn try_read(&mut self) -> Result<Option<ReadData>, Error> {
-        let mut reader = self.inner.lock().unwrap();
-        reader.read_buf(self.index)
+        let mut locked = self.inner.lock().unwrap();
+        loop {
+            break match locked.at_mut(self.index) {
+                Some((path, reader)) => {
+                    let byte_count = cancel_on_err(reader.read(&mut self.buf))
+                        .map_err(|err| Error::Io((err, path_string(path))))?;
+                    if byte_count == 0 {
+                        let (path, _) = locked.take_at(self.index).unwrap();
+                        Ok(Some(ReadData::FileDone(path)))
+                    } else {
+                        Ok(Some(ReadData::OpenFile(&self.buf[..byte_count])))
+                    }
+                }
+                None => match locked.get_new_reader()? {
+                    Some(NewReader::EmptyDir(path)) => Ok(Some(ReadData::EmptyDir(path))),
+                    Some(NewReader::File(path, reader)) => {
+                        locked.set_at(self.index, Some((path, reader)));
+                        continue;
+                    }
+                    None => Ok(None),
+                },
+            };
+        }
+    }
+}
+
+impl ExecReader for Mutex<STReader> {
+    fn get_handle(&self) -> impl ExecReaderHandle {
+        STReaderHandle::new(self)
     }
 }

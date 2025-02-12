@@ -156,7 +156,7 @@ impl HashHandler for AuditSrc {
 
 pub struct Checker<'a> {
     source: &'a AuditSrc,
-    reader: Lines<BufReader<File>>,
+    reader: HashesFile,
     backlog: VecDeque<HashData>,
     audit_err: bool,
 }
@@ -273,6 +273,7 @@ impl Checker<'_> {
     pub fn check(
         &mut self,
         handles: &[ScopedJoinHandle<Result<(), Error>>],
+        keep_state: bool,
     ) -> Result<bool, Error> {
         loop {
             let result = self.search();
@@ -281,14 +282,14 @@ impl Checker<'_> {
                 continue;
             }
             break result.map(|_| {
-                if self.backlog.is_empty() {
+                if keep_state || self.backlog.is_empty() {
                     return self.audit_err;
                 }
                 for HashData(path, _) in self.backlog.drain(..) {
                     if is_canceled() {
                         return self.audit_err;
                     }
-                    AuditError::NotFound(path_string(&path)).print_and_cancel(self.source.early)
+                    AuditError::NotFound(path_string(&path)).print_and_cancel(self.source.early);
                 }
                 true
             });

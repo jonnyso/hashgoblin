@@ -6,12 +6,10 @@ mod streader;
 const BUF_SIZE: usize = 36 * 1024;
 const HANDLE_BUF_SIZE: usize = 8 * 1024;
 
-use crate::hashing::{self, HashType, Hashed};
+use crate::hashing::{self, HashType};
 use crate::path::{path_on_fast_drive, PathList};
 use crate::Error;
 use std::fmt::Display;
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -24,11 +22,12 @@ use std::{
 pub use checker::AuditSrc;
 pub use mtreader::MTReader;
 pub use outfile::OutFile;
-pub use streader::{STReader, STReaderHandle};
+pub use streader::STReader;
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub fn cancel() {
+    println!("CANCELED");
     CANCEL.store(true, Ordering::Release);
 }
 
@@ -40,6 +39,7 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+#[derive(Debug)]
 pub struct HashData(PathBuf, Option<String>);
 
 impl Display for HashData {
@@ -69,67 +69,70 @@ pub trait HashHandler {
     fn handle(&self, hash_data: HashData) -> Result<(), Error>;
 }
 
-enum ReadData {
+pub enum ReadData<'a> {
     EmptyDir(PathBuf),
-    File(Option<[u8; HANDLE_BUF_SIZE]>),
+    OpenFile(&'a [u8]),
+    FileDone(PathBuf),
 }
 
-trait ExecReaderHandle {
+pub trait ExecReader {
+    fn get_handle(&self) -> impl ExecReaderHandle;
+}
+
+pub trait ExecReaderHandle {
     fn try_read(&mut self) -> Result<Option<ReadData>, Error>;
 }
 
-trait ExecReader {
-    fn get_handle(&self) -> Option<impl ExecReaderHandle>;
-}
-
 pub enum ReaderType {
-    MT(MTReader),
+    MT(Mutex<MTReader>),
     ST(Mutex<STReader>),
 }
 
-struct ReaderQueue(VecDeque<ReaderType>);
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn reader_list(paths: Vec<PathBuf>, max_threads: u8) -> Vec<ReaderType> {
+    vec![ReaderType::MT(Mutex::new(MTReader::new(paths)))]
+}
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-impl ReaderQueue {
-    fn new(paths: Vec<PathBuf>, max_threads: u8) -> Result<Self, ()> {
-        let path_list = match path_on_fast_drive(paths) {
-            Ok(paths) => paths,
-            Err(_) => return Err(()),
-        };
-        let path_list = path_list.into_iter().map(|pl| match pl {
-            PathList::SSD(list) => ReaderType::MT(MTReader::new(list)),
-            PathList::HDD(list) => ReaderType::ST(Mutex::new(STReader::new(list, max_threads))),
-        });
-        Ok(Self(VecDeque::from_iter(path_list)))
+pub fn reader_list(paths: Vec<PathBuf>, max_threads: u8) -> Vec<ReaderType> {
+    match path_on_fast_drive(paths) {
+        Ok(path_list) => path_list
+            .into_iter()
+            .map(|pl| match pl {
+                PathList::Ssd(list) => ReaderType::MT(Mutex::new(MTReader::new(list))),
+                PathList::Hdd(list) => ReaderType::ST(Mutex::new(STReader::new(list, max_threads))),
+            })
+            .collect(),
+        Err((paths, err)) => {
+            eprintln!("{err},\ndefaulting to multithread reader");
+            vec![ReaderType::MT(Mutex::new(MTReader::new(paths)))]
+        }
     }
 }
 
 pub fn run<T: HashHandler, R: ExecReaderHandle>(
     hash: &HashType,
-    reader: R,
+    mut reader: R,
     empty_dirs: bool,
     handler: &T,
 ) -> Result<(), Error> {
-    // let mut hasher = hashing::new_hasher(hash);
-    // while let Some(path) = queue.pop_front() {
-    //     if is_canceled() {
-    //         return Ok(());
-    //     }
-    //     if path.is_dir() {
-    //         let is_empty = cancel_on_err(queue.push_dir(&path))?;
-    //         if is_empty && empty_dirs {
-    //             cancel_on_err(handler.handle(HashData(path, None)))?;
-    //         }
-    //     } else {
-    //         let hash = match hashing::hash_file(&path, &mut *hasher) {
-    //             Ok(Hashed::Value(value)) => Ok(value),
-    //             Ok(Hashed::Canceled) => return Ok(()),
-    //             Err(err) => Err(Error::Io((err, path_string(&path)))),
-    //         };
-    //         let hash = cancel_on_err(hash)?;
-    //         cancel_on_err(handler.handle(HashData(path, Some(hash))))?;
-    //     }
-    // }
+    let mut hasher = hashing::new_hasher(hash);
+    while let Some(read_data) = reader.try_read()? {
+        if is_canceled() {
+            return Ok(());
+        }
+        match read_data {
+            ReadData::EmptyDir(path) => {
+                if empty_dirs {
+                    cancel_on_err(handler.handle(HashData(path, None)))?;
+                }
+            }
+            ReadData::OpenFile(buf) => hasher.update(buf),
+            ReadData::FileDone(path) => {
+                let hash = hex::encode(hasher.finalize_reset());
+                cancel_on_err(handler.handle(HashData(path, Some(hash))))?;
+            }
+        }
+    }
     Ok(())
 }
 

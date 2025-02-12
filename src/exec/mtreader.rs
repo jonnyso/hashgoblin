@@ -9,7 +9,8 @@ use std::{
 use crate::Error;
 
 use super::{
-    cancel_on_err, path_string, push_dir, ExecReaderHandle, ReadData, BUF_SIZE, HANDLE_BUF_SIZE,
+    cancel_on_err, path_string, push_dir, ExecReader, ExecReaderHandle, ReadData, BUF_SIZE,
+    HANDLE_BUF_SIZE,
 };
 
 enum NewReader {
@@ -42,9 +43,10 @@ impl MTReader {
     }
 }
 
-struct MTReaderHandle<'a> {
+pub struct MTReaderHandle<'a> {
     queue: &'a Mutex<MTReader>,
     reader: Option<(PathBuf, BufReader<File>)>,
+    buf: [u8; HANDLE_BUF_SIZE],
 }
 
 impl<'a> MTReaderHandle<'a> {
@@ -52,6 +54,7 @@ impl<'a> MTReaderHandle<'a> {
         Self {
             queue: mtreader,
             reader: None,
+            buf: [0; HANDLE_BUF_SIZE],
         }
     }
 }
@@ -61,14 +64,13 @@ impl ExecReaderHandle for MTReaderHandle<'_> {
         loop {
             break match self.reader.as_mut() {
                 Some((path, reader)) => {
-                    let mut buf = [0; HANDLE_BUF_SIZE];
-                    let byte_count = cancel_on_err(reader.read(&mut buf))
-                        .map_err(|err| Error::Io((err, path_string(&path))))?;
+                    let byte_count = cancel_on_err(reader.read(&mut self.buf))
+                        .map_err(|err| Error::Io((err, path_string(path))))?;
                     if byte_count == 0 {
-                        self.reader = None;
-                        Ok(None)
+                        let (path, _) = self.reader.take().unwrap();
+                        Ok(Some(ReadData::FileDone(path)))
                     } else {
-                        Ok(Some(ReadData::File(Some(buf))))
+                        Ok(Some(ReadData::OpenFile(&self.buf[..byte_count])))
                     }
                 }
                 None => {
@@ -89,5 +91,11 @@ impl ExecReaderHandle for MTReaderHandle<'_> {
                 }
             };
         }
+    }
+}
+
+impl ExecReader for Mutex<MTReader> {
+    fn get_handle(&self) -> impl ExecReaderHandle {
+        MTReaderHandle::new(self)
     }
 }

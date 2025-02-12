@@ -1,11 +1,13 @@
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt::Debug,
+    fmt::{Debug, Display},
     io,
     path::PathBuf,
 };
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Error<T: Debug> {
     Platform(T),
     Io(io::Error),
@@ -13,15 +15,28 @@ pub enum Error<T: Debug> {
     Utf8,
 }
 
-pub enum PathList {
-    SSD(Vec<PathBuf>),
-    HDD(Vec<PathBuf>),
+impl<T: Display + Debug> Display for Error<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Platform(err) => write!(f, "failed to determine if drive is ssd: {err}"),
+            Error::Io(err) => write!(f, "failed to determine if drive is ssd: {err}"),
+            Error::PathToStr | Error::Utf8 => {
+                write!(f, "failed to determine if drive is ssd: invalid path")
+            }
+        }
+    }
+}
+
+pub enum PathList<T> {
+    Ssd(Vec<T>),
+    Hdd(Vec<T>),
 }
 
 #[cfg(target_os = "windows")]
 mod windows_path {
     use super::Error;
     use std::ffi::OsString;
+    use std::fmt::Display;
     use std::fs::File;
     use std::mem::MaybeUninit;
     use std::os::windows::ffi::OsStringExt;
@@ -30,7 +45,7 @@ mod windows_path {
     use std::ptr;
     use std::{iter::once, os::windows::ffi::OsStrExt};
     use windows_sys::Win32::Foundation::{
-        GetLastError, INVALID_HANDLE_VALUE, MAX_PATH, WIN32_ERROR,
+        GetLastError, ERROR_INVALID_FUNCTION, INVALID_HANDLE_VALUE, MAX_PATH, WIN32_ERROR,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, GetVolumePathNameW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
@@ -42,7 +57,30 @@ mod windows_path {
     };
     use windows_sys::Win32::System::IO::DeviceIoControl;
 
-    pub fn get_volume_handle(path: &Path) -> Result<(OsString, File), Error<WIN32_ERROR>> {
+    #[derive(Debug)]
+    pub enum Win32Err {
+        VolumePathName(WIN32_ERROR),
+        CreateFileW(WIN32_ERROR),
+        DeviceIoCtl(WIN32_ERROR),
+    }
+
+    impl Display for Win32Err {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::VolumePathName(code) => {
+                    write!(f, "trying to get the volume path name, error code ({code})")
+                }
+                Self::CreateFileW(code) => {
+                    write!(f, "trying to create device handle, error code ({code})")
+                }
+                Self::DeviceIoCtl(code) => {
+                    write!(f, "trying to query device info, error code ({code})")
+                }
+            }
+        }
+    }
+
+    pub fn get_volume_handle(path: &Path) -> Result<(OsString, File), Error<Win32Err>> {
         let s_path: Vec<u16> = path
             .canonicalize()
             .map_err(Error::Io)?
@@ -52,7 +90,9 @@ mod windows_path {
             .collect();
         let mut buf = [0u16; MAX_PATH as usize];
         if unsafe { GetVolumePathNameW(s_path.as_ptr(), buf.as_mut_ptr(), MAX_PATH) } == 0 {
-            return Err(Error::Platform(unsafe { GetLastError() }));
+            return Err(Error::Platform(unsafe {
+                Win32Err::VolumePathName(GetLastError())
+            }));
         }
         if let Some(c) = buf.iter_mut().rfind(|c| **c != 0) {
             if *c == b'\\'.into() {
@@ -71,7 +111,9 @@ mod windows_path {
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            return Err(Error::Platform(unsafe { GetLastError() }));
+            return Err(Error::Platform(unsafe {
+                Win32Err::CreateFileW(GetLastError())
+            }));
         }
         Ok(unsafe {
             (
@@ -81,7 +123,7 @@ mod windows_path {
         })
     }
 
-    pub fn drive_incurs_penalty(volume: &File) -> Result<bool, WIN32_ERROR> {
+    pub fn drive_incurs_penalty(volume: &File) -> Result<bool, Win32Err> {
         let query = STORAGE_PROPERTY_QUERY {
             PropertyId: StorageDeviceSeekPenaltyProperty,
             QueryType: PropertyStandardQuery,
@@ -104,7 +146,12 @@ mod windows_path {
             )
         };
         if ok == 0 {
-            return Err(unsafe { GetLastError() });
+            let err_code = unsafe { GetLastError() };
+            if err_code == ERROR_INVALID_FUNCTION {
+                return Ok(true);
+            } else {
+                return Err(Win32Err::DeviceIoCtl(err_code));
+            }
         }
         let result = unsafe { result.assume_init() };
         Ok(result.IncursSeekPenalty == 1)
@@ -117,12 +164,22 @@ mod linux_path {
     use core::panic;
     use std::{
         ffi::OsString,
+        fmt::Display,
         fs::File,
         io::{self, Read},
         os::unix::ffi::OsStringExt,
         path::{Path, PathBuf},
         process::Command,
     };
+
+    #[derive(Debug)]
+    pub struct ErrMessage(OsString);
+
+    impl Display for ErrMessage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:?}", self.0)
+        }
+    }
 
     // /dev/sda -> sda
     // /dev/nvme0n1p3[/subovol] -> nvme0n1
@@ -141,7 +198,7 @@ mod linux_path {
         name
     }
 
-    pub fn find_volume_name(path: &Path) -> Result<String, Error<OsString>> {
+    pub fn find_volume_name(path: &Path) -> Result<String, Error<ErrMessage>> {
         let path = path.canonicalize().map_err(Error::Io)?;
         let mut output = Command::new("findmnt")
             .args([
@@ -153,7 +210,9 @@ mod linux_path {
             .output()
             .map_err(Error::Io)?;
         if !output.stderr.is_empty() {
-            return Err(Error::Platform(OsString::from_vec(output.stderr)));
+            return Err(Error::Platform(ErrMessage(OsString::from_vec(
+                output.stderr,
+            ))));
         }
         output.stdout.pop(); //removing line break
         Ok(extract_device_name(
@@ -176,53 +235,90 @@ mod linux_path {
     }
 }
 
+type PathResult<T> = Result<Vec<PathList<PathBuf>>, (Vec<PathBuf>, Error<T>)>;
+
 #[cfg(target_os = "linux")]
-pub fn path_on_fast_drive(paths: Vec<PathBuf>) -> Result<Vec<PathList>, Error<std::ffi::OsString>> {
+pub fn path_on_fast_drive(paths: Vec<PathBuf>) -> PathResult<linux_path::ErrMessage> {
     use std::rc::Rc;
 
-    let mut map = HashMap::with_capacity(paths.len());
-    for path in paths {
-        let volume_name = Rc::from(linux_path::find_volume_name(&path)?);
-        match map.entry(Rc::clone(&volume_name)) {
+    let mut index_map = HashMap::with_capacity_and_hasher(paths.len(), FxBuildHasher);
+    let mut paths = FxHashMap::from_iter(paths.into_iter().enumerate());
+    for (index, path) in paths.iter() {
+        let volume_name = match linux_path::find_volume_name(path) {
+            Ok(name) => Rc::from(name),
+            Err(err) => return Err((paths.into_values().collect(), err)),
+        };
+        match index_map.entry(Rc::clone(&volume_name)) {
             Entry::Occupied(entry) => match entry.into_mut() {
-                PathList::SSD(list) | PathList::HDD(list) => list.push(path),
+                PathList::Ssd(list) | PathList::Hdd(list) => list.push(*index),
             },
             Entry::Vacant(entry) => {
-                let is_rotational = linux_path::is_rotational(&volume_name).map_err(Error::Io)?;
-                let new = if is_rotational {
-                    PathList::HDD(vec![path])
-                } else {
-                    PathList::SSD(vec![path])
+                let new = match linux_path::is_rotational(&volume_name) {
+                    Ok(true) => PathList::Hdd(vec![*index]),
+                    Ok(false) => PathList::Ssd(vec![*index]),
+                    Err(err) => return Err((paths.into_values().collect(), Error::Io(err))),
                 };
                 entry.insert(new);
             }
         }
     }
-    Ok(map.into_values().collect())
+    let index_map = index_map
+        .into_values()
+        .map(|path_list| match path_list {
+            PathList::Ssd(indexes) => PathList::Ssd(
+                indexes
+                    .into_iter()
+                    .map(|index| paths.remove(&index).unwrap())
+                    .collect(),
+            ),
+            PathList::Hdd(indexes) => PathList::Hdd(
+                indexes
+                    .into_iter()
+                    .map(|index| paths.remove(&index).unwrap())
+                    .collect(),
+            ),
+        })
+        .collect();
+    Ok(index_map)
 }
 
 #[cfg(target_os = "windows")]
-pub fn path_on_fast_drive(
-    paths: Vec<PathBuf>,
-) -> Result<Vec<PathList>, Error<windows_sys::Win32::Foundation::WIN32_ERROR>> {
-    let mut map = HashMap::with_capacity(paths.len());
-    for path in paths {
-        let (drive_path, handle) = windows_path::get_volume_handle(&path)?;
-        match map.entry(drive_path) {
+pub fn path_on_fast_drive(paths: Vec<PathBuf>) -> PathResult<windows_path::Win32Err> {
+    let mut index_map = HashMap::with_capacity_and_hasher(paths.len(), FxBuildHasher);
+    let mut paths = FxHashMap::from_iter(paths.into_iter().enumerate());
+    for (index, path) in paths.iter() {
+        let (drive_path, handle) = match windows_path::get_volume_handle(path) {
+            Ok(path_info) => path_info,
+            Err(err) => return Err((paths.into_values().collect(), err)),
+        };
+        match index_map.entry(drive_path) {
             Entry::Occupied(entry) => match entry.into_mut() {
-                PathList::SSD(list) | PathList::HDD(list) => list.push(path),
+                PathList::Ssd(list) | PathList::Hdd(list) => list.push(*index),
             },
             Entry::Vacant(entry) => {
-                let incurs_penalty =
-                    windows_path::drive_incurs_penalty(&handle).map_err(Error::Platform)?;
-                let new = if incurs_penalty {
-                    PathList::HDD(vec![path])
-                } else {
-                    PathList::SSD(vec![path])
+                let new = match windows_path::drive_incurs_penalty(&handle) {
+                    Ok(true) => PathList::Hdd(vec![*index]),
+                    Ok(false) => PathList::Ssd(vec![*index]),
+                    Err(err) => return Err((paths.into_values().collect(), Error::Platform(err))),
                 };
                 entry.insert(new);
             }
         }
     }
-    Ok(map.into_values().collect())
+    let index_map = index_map
+        .into_values()
+        .map(|path_list| match path_list {
+            PathList::Ssd(list) => PathList::Ssd(
+                list.into_iter()
+                    .map(|index| paths.remove(&index).unwrap())
+                    .collect(),
+            ),
+            PathList::Hdd(list) => PathList::Hdd(
+                list.into_iter()
+                    .map(|index| paths.remove(&index).unwrap())
+                    .collect(),
+            ),
+        })
+        .collect();
+    Ok(index_map)
 }

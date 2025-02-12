@@ -1,14 +1,6 @@
-use std::{
-    fmt::Display,
-    fs::File,
-    io::{self, BufRead, BufReader},
-    path::Path,
-    str::FromStr,
-};
+use std::{fmt::Display, str::FromStr};
 
 use digest::DynDigest;
-
-use crate::exec::is_canceled;
 
 pub enum HashType {
     MD5,
@@ -59,26 +51,4 @@ pub fn new_hasher(hash: &HashType) -> Box<dyn DynDigest> {
         HashType::Tiger => Box::new(tiger::Tiger::default()),
         HashType::Whirlpool => Box::new(whirlpool::Whirlpool::default()),
     }
-}
-
-pub enum Hashed {
-    Value(String),
-    Canceled,
-}
-
-pub fn hash_file(path: &Path, hasher: &mut dyn DynDigest) -> io::Result<Hashed> {
-    let mut reader = BufReader::new(File::open(path)?);
-    loop {
-        if is_canceled() {
-            return Ok(Hashed::Canceled);
-        }
-        let data = reader.fill_buf()?;
-        if data.is_empty() {
-            break;
-        }
-        let length = data.len();
-        hasher.update(data);
-        reader.consume(length);
-    }
-    Ok(Hashed::Value(hex::encode(hasher.finalize_reset())))
 }
