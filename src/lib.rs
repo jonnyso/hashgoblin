@@ -2,7 +2,7 @@ mod error;
 mod exec;
 mod hashing;
 
-use exec::{run, AuditSrc, OutFile, Queue};
+use exec::{add_time_finish, run, AuditSrc, OutFile, Queue};
 use std::{fs, path::PathBuf, thread};
 
 pub use error::Error;
@@ -20,23 +20,27 @@ pub fn create(
 ) -> Result<(), Error> {
     let outfile = OutFile::new(output, &hash)?;
     let queue = Queue::new(input, recursive)?;
-    thread::scope(|s| {
+    let result = thread::scope(|s| {
         let mut handles = Vec::with_capacity(max_threads as usize);
         while handles.len() < max_threads as usize {
             handles.push(s.spawn(|| run(&hash, &queue, empty_dirs, &outfile)));
         }
-        let result = handles
+        handles
             .into_iter()
             .map(|handle| handle.join().unwrap())
             .find(|handle| handle.is_err())
-            .unwrap_or(Ok(()));
-        if result.is_err() {
-            if let Err(err) = fs::remove_file(outfile.path()) {
-                eprintln!("Failed to clean up output file: {err}");
-            }
+            .unwrap_or(Ok(()))
+    });
+    if result.is_err() {
+        if let Err(err) = fs::remove_file(outfile.path()) {
+            eprintln!("WARNING: Failed to clean up output file: {err}");
         }
-        result
-    })
+    } else {
+        if let Err(err) = add_time_finish(outfile.path()) {
+            eprintln!("WARNING: Failed to include the time_finished into the hashes file: {err}");
+        }
+    }
+    result
 }
 
 pub fn audit(

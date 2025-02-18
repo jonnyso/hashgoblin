@@ -74,6 +74,14 @@ fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Erro
             _ => return Err(Error::FileFormat),
         },
     };
+    match lines.next() {
+        None => return Err(Error::FileFormat),
+        Some(Err(err)) => return Err(Error::ReadLine(err)),
+        Some(Ok(line)) => match line.split_once(char::is_whitespace) {
+            Some(("time_start", _)) => (),
+            _ => return Err(Error::FileFormat),
+        },
+    };
     Ok((lines, hash))
 }
 
