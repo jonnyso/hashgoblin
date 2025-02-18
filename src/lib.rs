@@ -53,20 +53,24 @@ pub fn audit(
 ) -> Result<(), Error> {
     let (checkfile, hash, reader) = AuditSrc::new(hashes_file, early, empty_dirs)?;
     let queue = Queue::new(input, recursive)?;
-    thread::scope(|s| {
+    let audit_err = thread::scope(|s| {
         let mut handles = Vec::with_capacity(max_threads as usize);
         while handles.len() < max_threads as usize {
             handles.push(s.spawn(|| run(&hash, &queue, empty_dirs, &checkfile)));
         }
         let mut checker = checkfile.checker(reader);
         let audit_err = checker.check(&handles)?;
-        if !audit_err {
-            println!("ok");
-        }
-        handles
+        let err = handles
             .into_iter()
             .map(|handle| handle.join().unwrap())
-            .find(|result| result.is_err())
-            .unwrap_or(Ok(()))
-    })
+            .find(|result| result.is_err());
+        match err {
+            Some(result) => Err(result.err().unwrap()),
+            None => Ok(audit_err),
+        }
+    })?;
+    if !audit_err {
+        println!("ok");
+    }
+    Ok(())
 }
