@@ -2,7 +2,7 @@ mod error;
 mod exec;
 mod hashing;
 
-use exec::{add_time_finish, run, AuditSrc, OutFile, Queue};
+use exec::{run, AuditSrc, OutFile, Queue};
 use std::{fs, path::PathBuf, thread};
 
 pub use error::Error;
@@ -18,7 +18,10 @@ pub fn create(
     output: Option<PathBuf>,
     empty_dirs: bool,
 ) -> Result<(), Error> {
-    let outfile = OutFile::new(output, &hash)?;
+    let path = output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_OUT));
+    let outfile = OutFile::new(&path, &hash)?;
     let queue = Queue::new(input, recursive)?;
     let result = thread::scope(|s| {
         let mut handles = Vec::with_capacity(max_threads as usize);
@@ -32,13 +35,11 @@ pub fn create(
             .unwrap_or(Ok(()))
     });
     if result.is_err() {
-        if let Err(err) = fs::remove_file(outfile.path()) {
+        if let Err(err) = fs::remove_file(&path) {
             eprintln!("WARNING: Failed to clean up output file: {err}");
         }
     } else {
-        if let Err(err) = add_time_finish(outfile.path()) {
-            eprintln!("WARNING: Failed to include the time_finished into the hashes file: {err}");
-        }
+        outfile.finish()?;
     }
     result
 }

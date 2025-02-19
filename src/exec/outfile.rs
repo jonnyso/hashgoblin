@@ -1,11 +1,10 @@
 use jiff::{Unit, Zoned};
 
-use crate::{hashing::HashType, Error, DEFAULT_OUT};
+use crate::{hashing::HashType, Error};
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    os::unix::fs::FileExt,
-    path::{Path, PathBuf},
+    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    path::Path,
     sync::Mutex,
 };
 
@@ -13,44 +12,77 @@ use super::{HashData, HashHandler};
 
 pub struct OutFile {
     writer: Mutex<BufWriter<File>>,
-    path: PathBuf,
 }
 
 impl OutFile {
-    pub fn new(path: Option<PathBuf>, hash: &HashType) -> Result<Self, Error> {
-        let path = path.unwrap_or(PathBuf::from(DEFAULT_OUT));
+    pub fn new(path: &Path, hash: &HashType) -> Result<Self, Error> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&path)
-            .map_err(Error::Output)?;
+            .open(path)
+            .map_err(Error::OutputRead)?;
         let mut writer = BufWriter::new(file);
         let version = env!("CARGO_PKG_VERSION");
         let time = current_time_string();
         writer
             .write_all(format!("version {version}\nalgo {hash}\ntime_start {time}\n").as_bytes())
-            .map_err(Error::Output)?;
+            .map_err(Error::OutputWrite)?;
         Ok(Self {
             writer: Mutex::new(writer),
-            path,
         })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn finish(self) -> Result<(), Error> {
+        let writer = self.writer.into_inner().map_err(|_| {
+            Error::OutputFinish("failed retrieve outfile bufwriter out of mutex".to_owned())
+        })?;
+        let mut file = writer.into_inner().map_err(|_| {
+            Error::OutputFinish("failed to retrieve inner file out of bufwriter".to_owned())
+        })?;
+        file.rewind().unwrap();
+        let cursor = {
+            let mut reader = BufReader::new(&file);
+            let _ = reader.by_ref().lines().skip(2).next();
+            reader.seek(SeekFrom::Current(0)).unwrap() - 1
+        };
+        let mut time_str: Vec<u8> = format!(" - time_finish {}", current_time_string()).into();
+        let mut overlap = vec![0; time_str.len()];
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::fs::FileExt;
+
+            file.seek_read(&mut overlap, cursor)
+                .map_err(Error::OutputRead)?;
+            time_str.extend(overlap);
+            file.seek_write(&time_str, cursor)
+                .map_err(Error::OutputWrite)?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::FileExt;
+
+            file.read_at(&mut overlap, cursor)
+                .map_err(Error::OutputRead)?;
+            time_str.extend(overlap);
+            file.write_at(&time_str, cursor)
+                .map_err(Error::OutputWrite)?;
+        }
+
+        Ok(())
     }
 }
 
 impl HashHandler for OutFile {
     fn handle(&self, hash_data: HashData) -> Result<(), Error> {
-        let line = format!("{hash_data}\n");
         self.writer
             .lock()
             .unwrap()
-            .write_all(line.as_bytes())
-            .map_err(Error::Output)
+            .write_all(format!("{hash_data}\n").as_bytes())
+            .map_err(Error::OutputWrite)
     }
 }
 
@@ -62,19 +94,4 @@ fn current_time_string() -> String {
             "[NO DATE]".to_owned()
         }
     }
-}
-
-pub fn add_time_finish(path: &Path) -> io::Result<()> {
-    let outfile = OpenOptions::new().read(true).write(true).open(path)?;
-    let position = {
-        let mut reader = BufReader::new(&outfile);
-        let _ = reader.by_ref().lines().skip(2).next();
-        reader.seek(SeekFrom::Current(0))? - 1
-    };
-    let mut time_str: Vec<u8> = format!(" - time_finish {}", current_time_string()).into();
-    let mut overlap = vec![0; time_str.len()];
-    outfile.read_at(&mut overlap, position)?;
-    time_str.extend(overlap);
-    outfile.write_at(&time_str, position)?;
-    Ok(())
 }

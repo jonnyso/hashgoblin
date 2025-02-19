@@ -14,7 +14,7 @@ use std::{
 };
 
 pub use checker::AuditSrc;
-pub use outfile::{add_time_finish, OutFile};
+pub use outfile::OutFile;
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
