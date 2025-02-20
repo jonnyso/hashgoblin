@@ -3,7 +3,7 @@ use jiff::{Unit, Zoned};
 use crate::{hashing::HashType, Error};
 use std::{
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
     path::Path,
     sync::Mutex,
 };
@@ -26,9 +26,11 @@ impl OutFile {
         let mut writer = BufWriter::new(file);
         let version = env!("CARGO_PKG_VERSION");
         let time = current_time_string();
-        writer
-            .write_all(format!("version {version}\nalgo {hash}\ntime_start {time}\n").as_bytes())
-            .map_err(Error::OutputWrite)?;
+        let mut time_str: Vec<u8> =
+            format!("version {version}\nalgo {hash}\ntime_start {time} - time_finish ").into();
+        time_str.extend(vec![b' '; time.len()]);
+        time_str.push(b'\n');
+        writer.write_all(&time_str).map_err(Error::OutputWrite)?;
         Ok(Self {
             writer: Mutex::new(writer),
         })
@@ -42,22 +44,18 @@ impl OutFile {
             Error::OutputFinish("failed to retrieve inner file out of bufwriter".to_owned())
         })?;
         file.rewind().unwrap();
+        let time_str = current_time_string();
         let cursor = {
             let mut reader = BufReader::new(&file);
-            let _ = reader.by_ref().lines().skip(2).next();
-            reader.seek(SeekFrom::Current(0)).unwrap() - 1
+            let _ = reader.by_ref().lines().nth(2);
+            reader.stream_position().unwrap() - (time_str.len() + 1) as u64
         };
-        let mut time_str: Vec<u8> = format!(" - time_finish {}", current_time_string()).into();
-        let mut overlap = vec![0; time_str.len()];
 
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::fs::FileExt;
 
-            file.seek_read(&mut overlap, cursor)
-                .map_err(Error::OutputRead)?;
-            time_str.extend(overlap);
-            file.seek_write(&time_str, cursor)
+            file.seek_write(time_str.as_bytes(), cursor)
                 .map_err(Error::OutputWrite)?;
         }
 
@@ -65,10 +63,7 @@ impl OutFile {
         {
             use std::os::unix::fs::FileExt;
 
-            file.read_at(&mut overlap, cursor)
-                .map_err(Error::OutputRead)?;
-            time_str.extend(overlap);
-            file.write_at(&time_str, cursor)
+            file.write_at(time_str.as_bytes(), cursor)
                 .map_err(Error::OutputWrite)?;
         }
 
