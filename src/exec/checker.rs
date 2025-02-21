@@ -10,9 +10,9 @@ use std::{
     time::Duration,
 };
 
-use crate::{exec::cancel, message_out, Error, HashType, DEFAULT_OUT};
+use crate::{DEFAULT_OUT, Error, HashType, exec::cancel, message_out};
 
-use super::{cancel_on_err, is_canceled, path_string, HashData, HashHandler};
+use super::{HashData, HashHandler, cancel_on_err, is_canceled, path_string};
 
 enum AuditError {
     NotFound(String),
@@ -59,8 +59,8 @@ fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Erro
                 let current = env!("CARGO_PKG_VERSION");
                 if current != version {
                     eprintln!(
-                            "WARNING: the hashes file was created using a different version of this program"
-                        );
+                        "WARNING: the hashes file was created using a different version of this program"
+                    );
                 }
             }
             _ => return Err(Error::FileFormat),
@@ -191,7 +191,7 @@ impl Checker<'_> {
                             Ok(true)
                         } else {
                             Err(AuditError::Mismatch(path_string(path)))
-                        }
+                        };
                     }
                     Err(ComparedPath::Unrelated) => {
                         self.backlog.push_back(HashData(list_path, list_hash));

@@ -1,6 +1,6 @@
 use jiff::{Unit, Zoned};
 
-use crate::{hashing::HashType, Error};
+use crate::{Error, hashing::HashType};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Read, Seek, Write},

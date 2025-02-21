@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gumdrop::Options;
-use hashgoblin::{audit, create, stdout_buf_init, Error, HashType};
+use hashgoblin::{Error, HashType, audit, create, stdout_buf_init};
 
 #[derive(Options)]
 struct Args {

@@ -1,15 +1,15 @@
 mod checker;
 mod outfile;
 
-use crate::hashing::{self, HashType, Hashed};
 use crate::Error;
+use crate::hashing::{self, HashType, Hashed};
 use std::fmt::Display;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Mutex,
+        atomic::{AtomicBool, Ordering},
     },
 };
 

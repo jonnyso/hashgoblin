@@ -33,7 +33,10 @@ impl Display for Error {
             }
             Self::OutputRead(error) => write!(f, "failed to read output file: {error}"),
             Self::OutputWrite(error) => write!(f, "failed to write to output file: {error}"),
-            Self::OutputFinish(_) => write!(f, "hashing concluded successfully but the program failed to insert the finish time into the file"),
+            Self::OutputFinish(_) => write!(
+                f,
+                "hashing concluded successfully but the program failed to insert the finish time into the file"
+            ),
             Self::FileFormat => write!(f, "invalid hashes file format"),
             Self::InvalidHash(value) => write!(f, "{value}"),
             Self::ReadLine(error) => write!(f, "failed to read hashes file: {error}"),

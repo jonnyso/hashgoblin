@@ -2,7 +2,7 @@ mod error;
 mod exec;
 mod hashing;
 
-use exec::{run, AuditSrc, OutFile, Queue};
+use exec::{AuditSrc, OutFile, Queue, run};
 use std::{
     fmt::Display,
     fs,
