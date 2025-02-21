@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     fmt::Display,
     fs::File,
-    io::{self, BufRead, BufReader, BufWriter, Lines, Stdout, Write},
+    io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
     str::FromStr,
     sync::Mutex,
@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{exec::cancel, Error, HashType, DEFAULT_OUT};
+use crate::{exec::cancel, message_out, Error, HashType, DEFAULT_OUT};
 
 use super::{cancel_on_err, is_canceled, path_string, HashData, HashHandler};
 
@@ -37,10 +37,8 @@ impl Display for AuditError {
 }
 
 impl AuditError {
-    fn print_and_cancel(&self, early: bool, stdout: &mut BufWriter<Stdout>) {
-        stdout
-            .write_all(format!("{self}\n").as_bytes())
-            .expect("failed to return audit_err");
+    fn print_and_cancel(&self, early: bool) {
+        message_out(self, false);
         if early {
             cancel();
         }
@@ -145,7 +143,6 @@ impl AuditSrc {
             reader,
             backlog: VecDeque::with_capacity(100),
             audit_err: false,
-            stdout: BufWriter::new(io::stdout()),
         }
     }
 
@@ -170,7 +167,6 @@ pub struct Checker<'a> {
     reader: Lines<BufReader<File>>,
     backlog: VecDeque<HashData>,
     audit_err: bool,
-    stdout: BufWriter<Stdout>,
 }
 
 impl Checker<'_> {
@@ -259,7 +255,7 @@ impl Checker<'_> {
                     Ok(false) => (),
                     Err(err) => {
                         self.audit_err = true;
-                        err.print_and_cancel(self.source.early, &mut self.stdout)
+                        err.print_and_cancel(self.source.early)
                     }
                 };
             }
@@ -269,13 +265,13 @@ impl Checker<'_> {
                     ReaderErr::Error(err) => cancel_on_err(Err(err))?,
                     ReaderErr::Audit(err) => {
                         self.audit_err = true;
-                        err.print_and_cancel(self.source.early, &mut self.stdout);
+                        err.print_and_cancel(self.source.early);
                     }
                 },
                 None => {
                     self.audit_err = true;
                     AuditError::Extra(path_string(&hash_data.0))
-                        .print_and_cancel(self.source.early, &mut self.stdout);
+                        .print_and_cancel(self.source.early);
                 }
             };
         }
@@ -300,8 +296,7 @@ impl Checker<'_> {
                     if is_canceled() {
                         return self.audit_err;
                     }
-                    AuditError::NotFound(path_string(&path))
-                        .print_and_cancel(self.source.early, &mut self.stdout)
+                    AuditError::NotFound(path_string(&path)).print_and_cancel(self.source.early)
                 }
                 true
             });

@@ -3,12 +3,64 @@ mod exec;
 mod hashing;
 
 use exec::{run, AuditSrc, OutFile, Queue};
-use std::{fs, path::PathBuf, thread};
+use std::{
+    fmt::Display,
+    fs,
+    io::{self, BufWriter, Stdout, Write},
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+    thread::{self},
+};
 
 pub use error::Error;
 pub use hashing::HashType;
 
 const DEFAULT_OUT: &str = "./hashes.txt";
+
+pub static STDOUT_BUF: OnceLock<StdoutBuf> = OnceLock::new();
+
+#[derive(Debug)]
+pub struct StdoutBuf {
+    verbose: bool,
+    writer: Mutex<BufWriter<Stdout>>,
+}
+
+impl StdoutBuf {
+    pub fn new(verbose: bool) -> Self {
+        Self {
+            verbose,
+            writer: Mutex::new(BufWriter::new(io::stdout())),
+        }
+    }
+
+    pub fn print<M: Display>(&self, message: M, verbose: bool) {
+        if self.verbose || !verbose {
+            let thread_id = thread::current().id();
+            let mut writer = self.writer.lock().unwrap();
+            let result = if self.verbose {
+                write!(&mut writer, "{:?}: {message}\n", thread_id)
+            } else {
+                write!(&mut writer, "{message}\n")
+            };
+            if let Err(err) = result {
+                eprintln!("failed to print message: {err}");
+            }
+        }
+    }
+}
+
+pub fn message_out<M: Display>(message: M, verbose: bool) {
+    STDOUT_BUF
+        .get()
+        .expect("OnceLock cell should already be set")
+        .print(message, verbose);
+}
+
+pub fn stdout_buf_init(verbose: bool) {
+    STDOUT_BUF
+        .set(StdoutBuf::new(verbose))
+        .expect("OnceLock cell should be empty");
+}
 
 pub fn create(
     input: &[String],
@@ -40,6 +92,7 @@ pub fn create(
         }
     } else {
         outfile.finish()?;
+        println!("done")
     }
     result
 }

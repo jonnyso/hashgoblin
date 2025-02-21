@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gumdrop::Options;
-use hashgoblin::{audit, create, Error, HashType};
+use hashgoblin::{audit, create, stdout_buf_init, Error, HashType};
 
 #[derive(Options)]
 struct Args {
@@ -15,6 +15,8 @@ struct Args {
         help = "unless this option is present, empty directories will be ignored by default"
     )]
     empty_dirs: bool,
+    #[options(help = "prints detailed information during this program execution")]
+    verbose: bool,
     #[options(command)]
     command: Option<Command>,
 }
@@ -66,6 +68,7 @@ enum Command {
 
 fn main() -> Result<(), Error> {
     let args = Args::parse_args_default_or_exit();
+    stdout_buf_init(args.verbose);
     match args.command {
         Some(Command::Create(opts)) => create(
             &opts.source,
