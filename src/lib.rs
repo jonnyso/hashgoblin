@@ -25,8 +25,8 @@ pub fn verbose_init(value: bool) {
 pub fn verbose_print<M: Display>(message: M, is_verbose: bool) {
     let verbose = *VERBOSE.get().unwrap();
     if verbose || !is_verbose {
-        let thread_id = thread::current().id();
         if verbose {
+            let thread_id = thread::current().id();
             println!("{:?}: {message}", thread_id);
         } else {
             println!("{message}");
