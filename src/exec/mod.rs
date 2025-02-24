@@ -1,8 +1,8 @@
 mod checker;
 mod outfile;
 
-use crate::Error;
 use crate::hashing::{self, HashType, Hashed};
+use crate::{Error, verbose_print};
 use std::fmt::Display;
 use std::{
     collections::VecDeque,
@@ -20,6 +20,7 @@ static CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub fn cancel() {
     CANCEL.store(true, Ordering::Release);
+    verbose_print("CANCELED", true);
 }
 
 pub fn is_canceled() -> bool {
@@ -71,11 +72,13 @@ pub fn run<T: HashHandler>(
             return Ok(());
         }
         if path.is_dir() {
+            verbose_print(format!("hashing: reading dir {:?}", &path), true);
             let is_empty = cancel_on_err(queue.push_dir(&path))?;
             if is_empty && empty_dirs {
                 cancel_on_err(handler.handle(HashData(path, None)))?;
             }
         } else {
+            verbose_print(format!("hashing file: {:?}", &path), true);
             let hash = match hashing::hash_file(&path, &mut *hasher) {
                 Ok(Hashed::Value(value)) => Ok(value),
                 Ok(Hashed::Canceled) => return Ok(()),

@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{DEFAULT_OUT, Error, HashType, exec::cancel, message_out};
+use crate::{DEFAULT_OUT, Error, HashType, exec::cancel, verbose_print};
 
 use super::{HashData, HashHandler, cancel_on_err, is_canceled, path_string};
 
@@ -38,7 +38,7 @@ impl Display for AuditError {
 
 impl AuditError {
     fn print_and_cancel(&self, early: bool) {
-        message_out(self, false);
+        verbose_print(self, false);
         if early {
             cancel();
         }
@@ -48,6 +48,7 @@ impl AuditError {
 type HashesFile = Lines<BufReader<File>>;
 
 fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Error> {
+    verbose_print("loading check file", true);
     let path = path.unwrap_or(PathBuf::from(DEFAULT_OUT));
     let file = File::open(&path).map_err(|err| Error::Io((err, path_string(&path))))?;
     let mut lines = BufReader::new(file).lines();
@@ -91,6 +92,10 @@ enum ComparedPath {
 }
 
 fn compare_paths(reader_path: &Path, path: &Path) -> Result<(), ComparedPath> {
+    verbose_print(
+        format!("comparing path {:?} to {:?}", reader_path, path),
+        true,
+    );
     if reader_path == path {
         return Ok(());
     }
@@ -171,6 +176,7 @@ pub struct Checker<'a> {
 
 impl Checker<'_> {
     fn read_next(&mut self) -> Result<Option<HashData>, Error> {
+        verbose_print("reading next line from hashes file", true);
         let next_line = match self.reader.next() {
             Some(result) => result.map_err(Error::ReadLine)?,
             None => return Ok(None),
@@ -178,7 +184,8 @@ impl Checker<'_> {
         HashData::try_from_string(next_line, self.source.empty_dirs).map(Some)
     }
 
-    fn search_backlog(&mut self, HashData(path, hash): &HashData) -> Result<bool, AuditError> {
+    fn search_backlog(&mut self, hd @ HashData(path, hash): &HashData) -> Result<bool, AuditError> {
+        verbose_print(format!("searching {hd} in backlog"), true);
         let len = self.backlog.len();
         for _ in 0..len {
             if is_canceled() {
@@ -187,6 +194,7 @@ impl Checker<'_> {
             if let Some(HashData(list_path, list_hash)) = self.backlog.pop_front() {
                 match compare_paths(&list_path, path) {
                     Ok(_) => {
+                        verbose_print(format!("found {hd} in backlog"), true);
                         return if &list_hash == hash {
                             Ok(true)
                         } else {
@@ -199,6 +207,9 @@ impl Checker<'_> {
                     }
                     Err(ComparedPath::Audit(audit_err)) => {
                         if let AuditError::EmptyDir(_) = &audit_err {
+                            // pushing to backlog so other files that should be in this
+                            // dir can throw the correct error.
+                            // TODO: It might be better to create a separate queue to check this
                             self.backlog.push_back(HashData(list_path, list_hash));
                         }
                         return Err(audit_err);
@@ -209,7 +220,11 @@ impl Checker<'_> {
         Ok(false)
     }
 
-    fn search_reader(&mut self, HashData(path, hash): &HashData) -> Option<Result<(), ReaderErr>> {
+    fn search_reader(
+        &mut self,
+        hd @ HashData(path, hash): &HashData,
+    ) -> Option<Result<(), ReaderErr>> {
+        verbose_print(format!("searching {hd} on hashes file"), true);
         loop {
             if is_canceled() {
                 return Some(Ok(()));
@@ -220,6 +235,7 @@ impl Checker<'_> {
                 Ok(Some(HashData(reader_path, reader_hash))) => {
                     match compare_paths(&reader_path, path) {
                         Ok(_) => {
+                            verbose_print(format!("found {hd} in hashes file"), true);
                             if &reader_hash == hash {
                                 Some(Ok(()))
                             } else {
@@ -229,11 +245,15 @@ impl Checker<'_> {
                             }
                         }
                         Err(ComparedPath::Unrelated) => {
+                            verbose_print(format!("pushing {hd} to backlog"), true);
                             self.backlog.push_back(HashData(reader_path, reader_hash));
                             continue;
                         }
                         Err(ComparedPath::Audit(audit_err)) => {
                             if let AuditError::EmptyDir(_) = &audit_err {
+                                // pushing to backlog so other files that should be in this
+                                // dir can throw the correct error.
+                                // TODO: It might be better to create a separate queue to check this
                                 self.backlog.push_back(HashData(reader_path, reader_hash));
                             }
                             Some(Err(ReaderErr::Audit(audit_err)))
@@ -245,6 +265,7 @@ impl Checker<'_> {
     }
 
     fn search(&mut self) -> Result<(), Error> {
+        verbose_print("begin search", true);
         while let Some(hash_data) = self.source.pop_front() {
             if is_canceled() {
                 return Ok(());
@@ -284,14 +305,20 @@ impl Checker<'_> {
     ) -> Result<bool, Error> {
         loop {
             let result = self.search();
-            if handles.iter().all(|handle| !handle.is_finished()) {
-                thread::sleep(Duration::from_millis(100));
+            if handles.iter().any(|handle| !handle.is_finished()) {
+                verbose_print("queue empty, awaiting new data", true);
+                thread::sleep(Duration::from_millis(50));
                 continue;
             }
             break result.map(|_| {
                 if self.backlog.is_empty() {
+                    verbose_print("search done, backlog is empty", true);
                     return self.audit_err;
                 }
+                verbose_print("search done, backlog not empty", true);
+                // BUG: This assumes that everything left in the backlog is a missing file,
+                // however the current also implementation keeps empty directories in the backlog
+                // reporting its missing instead of the proper error.
                 for HashData(path, _) in self.backlog.drain(..) {
                     if is_canceled() {
                         return self.audit_err;

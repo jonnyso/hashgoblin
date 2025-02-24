@@ -1,6 +1,6 @@
 use jiff::{Unit, Zoned};
 
-use crate::{Error, hashing::HashType};
+use crate::{Error, hashing::HashType, verbose_print};
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
@@ -16,6 +16,7 @@ pub struct OutFile {
 
 impl OutFile {
     pub fn new(path: &Path, hash: &HashType) -> Result<Self, Error> {
+        verbose_print("creating output file", true);
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -37,6 +38,7 @@ impl OutFile {
     }
 
     pub fn finish(self) -> Result<(), Error> {
+        verbose_print("writing finish date", true);
         let writer = self.writer.into_inner().map_err(|_| {
             Error::OutputFinish("failed retrieve outfile bufwriter out of mutex".to_owned())
         })?;

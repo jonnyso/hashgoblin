@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use gumdrop::Options;
-use hashgoblin::{Error, HashType, audit, create, stdout_buf_init};
+use hashgoblin::{Error, HashType, audit, create, verbose_init};
 
 #[derive(Options)]
 struct Args {
@@ -68,7 +68,7 @@ enum Command {
 
 fn main() -> Result<(), Error> {
     let args = Args::parse_args_default_or_exit();
-    stdout_buf_init(args.verbose);
+    verbose_init(args.verbose);
     match args.command {
         Some(Command::Create(opts)) => create(
             &opts.source,
