@@ -42,9 +42,7 @@ pub fn create(
     output: Option<PathBuf>,
     empty_dirs: bool,
 ) -> Result<(), Error> {
-    let path = output
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_OUT));
+    let path = output.unwrap_or_else(|| PathBuf::from(DEFAULT_OUT));
     let outfile = OutFile::new(&path, &hash)?;
     let queue = Queue::new(input, recursive)?;
     let result = thread::scope(|s| {

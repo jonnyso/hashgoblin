@@ -10,9 +10,14 @@ use std::{
     time::Duration,
 };
 
+use jiff::civil::Date;
+
 use crate::{DEFAULT_OUT, Error, HashType, exec::cancel, verbose_print};
 
-use super::{HashData, HashHandler, cancel_on_err, is_canceled, path_string};
+use super::{
+    HASH_ALGO_STR, HashData, HashHandler, NO_DATE_STR, TIME_FINISH_STR, TIME_START_STR,
+    VERSION_STR, cancel_on_err, is_canceled, path_string,
+};
 
 enum AuditError {
     NotFound(String),
@@ -24,7 +29,7 @@ enum AuditError {
 impl Display for AuditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuditError::NotFound(path) => write!(f, "audit_err: \"{path}\" not found "),
+            AuditError::NotFound(path) => write!(f, "audit_err: \"{path}\" not found"),
             AuditError::Mismatch(path) => write!(f, "audit_err: \"{path}\" does not match"),
             AuditError::Extra(path) => {
                 write!(f, "audit_err: aditional \"{path}\" found in audit source")
@@ -56,7 +61,7 @@ fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Erro
         None => return Err(Error::FileFormat),
         Some(Err(err)) => return Err(Error::ReadLine(err)),
         Some(Ok(line)) => match line.split_once(char::is_whitespace) {
-            Some(("version", version)) => {
+            Some((VERSION_STR, version)) => {
                 let current = env!("CARGO_PKG_VERSION");
                 if current != version {
                     eprintln!(
@@ -71,17 +76,30 @@ fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Erro
         None => return Err(Error::FileFormat),
         Some(Err(err)) => return Err(Error::ReadLine(err)),
         Some(Ok(line)) => match line.split_once(char::is_whitespace) {
-            Some(("algo", hash)) => HashType::from_str(hash).map_err(Error::InvalidHash)?,
+            Some((HASH_ALGO_STR, hash)) => HashType::from_str(hash).map_err(Error::InvalidHash)?,
             _ => return Err(Error::FileFormat),
         },
     };
     match lines.next() {
         None => return Err(Error::FileFormat),
         Some(Err(err)) => return Err(Error::ReadLine(err)),
-        Some(Ok(line)) => match line.split_once(char::is_whitespace) {
-            Some(("time_start", _)) => (),
-            _ => return Err(Error::FileFormat),
-        },
+        Some(Ok(line)) => {
+            let (start, finish) = line.split_once(" - ").ok_or(Error::FileFormat)?;
+            match start.split_once(char::is_whitespace) {
+                Some((TIME_START_STR, NO_DATE_STR)) => (),
+                Some((TIME_START_STR, time_start)) => {
+                    time_start.parse::<Date>().map_err(|_| Error::FileFormat)?;
+                }
+                _ => return Err(Error::FileFormat),
+            }
+            match finish.split_once(char::is_whitespace) {
+                Some((TIME_FINISH_STR, NO_DATE_STR)) => (),
+                Some((TIME_FINISH_STR, time_finish)) => {
+                    time_finish.parse::<Date>().map_err(|_| Error::FileFormat)?;
+                }
+                _ => return Err(Error::FileFormat),
+            }
+        }
     };
     Ok((lines, hash))
 }
@@ -99,6 +117,11 @@ fn compare_paths(reader_path: &Path, path: &Path) -> Result<(), ComparedPath> {
     if reader_path == path {
         return Ok(());
     }
+    // This assumes that this program implementation cannot create a hashes file
+    // describing the same directory being empty and filled at the same time, i.e.:
+    // both `/dir|` and `/dir|file.txt` simultaneausly.
+    // If the hashes file has been altered or malformed, the auditing process may return
+    // an incorrect result.
     match (reader_path.is_dir(), path.is_dir()) {
         (true, false) => match path.ancestors().nth(1) {
             Some(ancestor) if ancestor == reader_path => {
@@ -176,11 +199,14 @@ pub struct Checker<'a> {
 
 impl Checker<'_> {
     fn read_next(&mut self) -> Result<Option<HashData>, Error> {
-        verbose_print("reading next line from hashes file", true);
         let next_line = match self.reader.next() {
             Some(result) => result.map_err(Error::ReadLine)?,
             None => return Ok(None),
         };
+        verbose_print(
+            format!("reading next line from hashes file: {:?}", &next_line),
+            true,
+        );
         HashData::try_from_string(next_line, self.source.empty_dirs).map(Some)
     }
 
@@ -202,14 +228,12 @@ impl Checker<'_> {
                         };
                     }
                     Err(ComparedPath::Unrelated) => {
+                        verbose_print(format!("pushing {hd} to backlog"), true);
                         self.backlog.push_back(HashData(list_path, list_hash));
                         continue;
                     }
                     Err(ComparedPath::Audit(audit_err)) => {
                         if let AuditError::EmptyDir(_) = &audit_err {
-                            // pushing to backlog so other files that should be in this
-                            // dir can throw the correct error.
-                            // TODO: It might be better to create a separate queue to check this
                             self.backlog.push_back(HashData(list_path, list_hash));
                         }
                         return Err(audit_err);
@@ -251,9 +275,6 @@ impl Checker<'_> {
                         }
                         Err(ComparedPath::Audit(audit_err)) => {
                             if let AuditError::EmptyDir(_) = &audit_err {
-                                // pushing to backlog so other files that should be in this
-                                // dir can throw the correct error.
-                                // TODO: It might be better to create a separate queue to check this
                                 self.backlog.push_back(HashData(reader_path, reader_hash));
                             }
                             Some(Err(ReaderErr::Audit(audit_err)))
@@ -299,34 +320,37 @@ impl Checker<'_> {
         Ok(())
     }
 
+    fn flush_reader(&mut self) -> Result<(), Error> {
+        while let Some(hash_data) = self.read_next()? {
+            self.backlog.push_back(hash_data);
+        }
+        Ok(())
+    }
+
     pub fn check(
         &mut self,
         handles: &[ScopedJoinHandle<Result<(), Error>>],
     ) -> Result<bool, Error> {
         loop {
-            let result = self.search();
+            self.search()?;
             if handles.iter().any(|handle| !handle.is_finished()) {
                 verbose_print("queue empty, awaiting new data", true);
                 thread::sleep(Duration::from_millis(50));
                 continue;
             }
-            break result.map(|_| {
-                if self.backlog.is_empty() {
-                    verbose_print("search done, backlog is empty", true);
-                    return self.audit_err;
+            self.flush_reader()?;
+            if self.backlog.is_empty() {
+                verbose_print("search done, backlog is empty", true);
+                return Ok(self.audit_err);
+            }
+            verbose_print("search done, backlog not empty", true);
+            for HashData(path, _) in self.backlog.drain(..) {
+                if is_canceled() {
+                    return Ok(self.audit_err);
                 }
-                verbose_print("search done, backlog not empty", true);
-                // BUG: This assumes that everything left in the backlog is a missing file,
-                // however the current also implementation keeps empty directories in the backlog
-                // reporting its missing instead of the proper error.
-                for HashData(path, _) in self.backlog.drain(..) {
-                    if is_canceled() {
-                        return self.audit_err;
-                    }
-                    AuditError::NotFound(path_string(&path)).print_and_cancel(self.source.early)
-                }
-                true
-            });
+                AuditError::NotFound(path_string(&path)).print_and_cancel(self.source.early)
+            }
+            return Ok(true);
         }
     }
 }

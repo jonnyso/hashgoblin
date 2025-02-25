@@ -8,7 +8,9 @@ use std::{
     sync::Mutex,
 };
 
-use super::{HashData, HashHandler};
+use super::{
+    HASH_ALGO_STR, HashData, HashHandler, NO_DATE_STR, TIME_FINISH_STR, TIME_START_STR, VERSION_STR,
+};
 
 pub struct OutFile {
     writer: Mutex<BufWriter<File>>,
@@ -27,8 +29,10 @@ impl OutFile {
         let mut writer = BufWriter::new(file);
         let version = env!("CARGO_PKG_VERSION");
         let time = current_time_string();
-        let mut time_str: Vec<u8> =
-            format!("version {version}\nalgo {hash}\ntime_start {time} - time_finish ").into();
+        let mut time_str: Vec<u8> = format!(
+            "{VERSION_STR} {version}\n{HASH_ALGO_STR} {hash}\n{TIME_START_STR} {time} - {TIME_FINISH_STR} "
+        )
+        .into();
         time_str.extend(vec![b' '; time.len()]);
         time_str.push(b'\n');
         writer.write_all(&time_str).map_err(Error::OutputWrite)?;
@@ -88,7 +92,7 @@ fn current_time_string() -> String {
         Ok(dt) => dt.datetime().to_string(),
         Err(err) => {
             eprintln!("WARNING: failed to aquire current date: {err}");
-            "[NO DATE]".to_owned()
+            NO_DATE_STR.to_owned()
         }
     }
 }
