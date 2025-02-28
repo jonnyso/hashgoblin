@@ -39,6 +39,23 @@ fn path_string(path: &Path) -> String {
 
 pub struct HashData(PathBuf, Option<String>);
 
+impl HashData {
+    fn new(path: PathBuf) -> Self {
+        Self(path, None)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn push_hash(&mut self, hash_str: String) {
+        match &mut self.1 {
+            Some(hashes) => hashes.push_str(format!(",{hash_str}").as_str()),
+            None => self.1 = Some(hash_str),
+        }
+    }
+}
+
 impl Display for HashData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -67,12 +84,11 @@ pub trait HashHandler {
 }
 
 pub fn run<T: HashHandler>(
-    hash: &HashType,
+    hashes: &[HashType],
     queue: &Queue,
     empty_dirs: bool,
     handler: &T,
 ) -> Result<(), Error> {
-    let mut hasher = hashing::new_hasher(hash);
     while let Some(path) = queue.pop_front() {
         if is_canceled() {
             return Ok(());
@@ -85,13 +101,18 @@ pub fn run<T: HashHandler>(
             }
         } else {
             verbose_print(format!("hashing file: {:?}", &path), true);
-            let hash = match hashing::hash_file(&path, &mut *hasher) {
-                Ok(Hashed::Value(value)) => Ok(value),
-                Ok(Hashed::Canceled) => return Ok(()),
-                Err(err) => Err(Error::Io((err, path_string(&path)))),
-            };
-            let hash = cancel_on_err(hash)?;
-            cancel_on_err(handler.handle(HashData(path, Some(hash))))?;
+            let mut hash_data = HashData::new(path);
+            for hash in hashes {
+                let mut hasher = hashing::new_hasher(&hash);
+                let hash = match hashing::hash_file(hash_data.path(), &mut *hasher) {
+                    Ok(Hashed::Value(value)) => Ok(value),
+                    Ok(Hashed::Canceled) => return Ok(()),
+                    Err(err) => Err(Error::Io((err, path_string(hash_data.path())))),
+                };
+                let hash = cancel_on_err(hash)?;
+                hash_data.push_hash(hash);
+            }
+            cancel_on_err(handler.handle(hash_data))?;
         }
     }
     Ok(())

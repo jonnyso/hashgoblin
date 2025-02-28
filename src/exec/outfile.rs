@@ -17,7 +17,7 @@ pub struct OutFile {
 }
 
 impl OutFile {
-    pub fn new(path: &Path, hash: &HashType) -> Result<Self, Error> {
+    pub fn new(path: &Path, hash: &[HashType]) -> Result<Self, Error> {
         verbose_print("creating output file", true);
         let file = OpenOptions::new()
             .read(true)
@@ -30,7 +30,8 @@ impl OutFile {
         let version = env!("CARGO_PKG_VERSION");
         let time = current_time_string();
         let mut time_str: Vec<u8> = format!(
-            "{VERSION_STR} {version}\n{HASH_ALGO_STR} {hash}\n{TIME_START_STR} {time} - {TIME_FINISH_STR} "
+            "{VERSION_STR} {version}\n{HASH_ALGO_STR} {}\n{TIME_START_STR} {time} - {TIME_FINISH_STR} ",
+            hash.iter().map(HashType::as_str).collect::<Vec<&str>>().join(",")
         )
         .into();
         time_str.extend(vec![b' '; time.len()]);

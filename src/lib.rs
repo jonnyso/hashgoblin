@@ -38,17 +38,20 @@ pub fn create(
     input: &[String],
     recursive: bool,
     max_threads: u8,
-    hash: HashType,
+    mut hashes: Vec<HashType>,
     output: Option<PathBuf>,
     empty_dirs: bool,
 ) -> Result<(), Error> {
+    if hashes.is_empty() {
+        hashes.push(HashType::Sha256);
+    }
     let path = output.unwrap_or_else(|| PathBuf::from(DEFAULT_OUT));
-    let outfile = OutFile::new(&path, &hash)?;
+    let outfile = OutFile::new(&path, &hashes)?;
     let queue = Queue::new(input, recursive)?;
     let result = thread::scope(|s| {
         let mut handles = Vec::with_capacity(max_threads as usize);
         while handles.len() < max_threads as usize {
-            handles.push(s.spawn(|| run(&hash, &queue, empty_dirs, &outfile)));
+            handles.push(s.spawn(|| run(&hashes, &queue, empty_dirs, &outfile)));
         }
         handles
             .into_iter()

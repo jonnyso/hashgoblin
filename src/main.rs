@@ -32,7 +32,7 @@ struct CreateOpts {
         help = "hash algorithm, suported: sha256, tiger, whirlpool, sha1, md5, default: sha256",
         short = "H"
     )]
-    hash: Option<HashType>,
+    hash: Vec<HashType>,
     #[options(help = "path to the output file, default: ./hashes.txt")]
     output: Option<PathBuf>,
 }
@@ -74,7 +74,7 @@ fn main() -> Result<(), Error> {
             &opts.source,
             args.recursive,
             args.max_threads.unwrap_or(5),
-            opts.hash.unwrap_or(HashType::SHA256),
+            opts.hash,
             opts.output,
             args.empty_dirs,
         ),

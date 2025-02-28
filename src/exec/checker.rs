@@ -52,7 +52,7 @@ impl AuditError {
 
 type HashesFile = Lines<BufReader<File>>;
 
-fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Error> {
+fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, Vec<HashType>), Error> {
     verbose_print("loading check file", true);
     let path = path.unwrap_or(PathBuf::from(DEFAULT_OUT));
     let file = File::open(&path).map_err(|err| Error::Io((err, path_string(&path))))?;
@@ -72,11 +72,17 @@ fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Erro
             _ => return Err(Error::FileFormat),
         },
     };
-    let hash = match lines.next() {
+    let hashes = match lines.next() {
         None => return Err(Error::FileFormat),
         Some(Err(err)) => return Err(Error::ReadLine(err)),
         Some(Ok(line)) => match line.split_once(char::is_whitespace) {
-            Some((HASH_ALGO_STR, hash)) => HashType::from_str(hash).map_err(Error::InvalidHash)?,
+            Some((HASH_ALGO_STR, hashes)) => {
+                let mut hash_list = vec![];
+                for hash in hashes.split(',') {
+                    hash_list.push(HashType::from_str(hash).map_err(Error::InvalidHash)?);
+                }
+                hash_list
+            }
             _ => return Err(Error::FileFormat),
         },
     };
@@ -101,7 +107,7 @@ fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, HashType), Erro
             }
         }
     };
-    Ok((lines, hash))
+    Ok((lines, hashes))
 }
 
 enum ComparedPath {
@@ -155,14 +161,14 @@ impl AuditSrc {
         path: Option<PathBuf>,
         early: bool,
         empty_dirs: bool,
-    ) -> Result<(Self, HashType, HashesFile), Error> {
-        let (reader, hash) = load_check_file(path)?;
+    ) -> Result<(Self, Vec<HashType>, HashesFile), Error> {
+        let (reader, hashes) = load_check_file(path)?;
         let src = Self {
             queue: Mutex::new(VecDeque::new()),
             early,
             empty_dirs,
         };
-        Ok((src, hash, reader))
+        Ok((src, hashes, reader))
     }
 
     pub fn checker(&self, reader: HashesFile) -> Checker {

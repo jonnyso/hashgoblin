@@ -10,12 +10,25 @@ use digest::DynDigest;
 
 use crate::exec::is_canceled;
 
+#[derive(Debug)]
 pub enum HashType {
-    MD5,
-    SHA256,
-    SHA1,
+    Md5,
+    Sha256,
+    Sha1,
     Tiger,
     Whirlpool,
+}
+
+impl HashType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            HashType::Md5 => "md5",
+            HashType::Sha256 => "sha256",
+            HashType::Sha1 => "sha1",
+            HashType::Tiger => "tiger",
+            HashType::Whirlpool => "whirlpool",
+        }
+    }
 }
 
 impl FromStr for HashType {
@@ -23,9 +36,9 @@ impl FromStr for HashType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "md5" => Ok(HashType::MD5),
-            "sha1" => Ok(HashType::SHA1),
-            "sha256" => Ok(HashType::SHA256),
+            "md5" => Ok(HashType::Md5),
+            "sha1" => Ok(HashType::Sha1),
+            "sha256" => Ok(HashType::Sha256),
             "tiger" => Ok(HashType::Tiger),
             "whirlpool" => Ok(HashType::Whirlpool),
             _ => Err(format!(
@@ -37,25 +50,15 @@ impl FromStr for HashType {
 
 impl Display for HashType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                HashType::MD5 => "md5",
-                HashType::SHA256 => "sha256",
-                HashType::SHA1 => "sha1",
-                HashType::Tiger => "tiger",
-                HashType::Whirlpool => "whirlpool",
-            }
-        )
+        write!(f, "{}", self.as_str())
     }
 }
 
 pub fn new_hasher(hash: &HashType) -> Box<dyn DynDigest> {
     match hash {
-        HashType::MD5 => Box::new(md5::Md5::default()),
-        HashType::SHA256 => Box::new(sha2::Sha256::default()),
-        HashType::SHA1 => Box::new(sha1::Sha1::default()),
+        HashType::Md5 => Box::new(md5::Md5::default()),
+        HashType::Sha256 => Box::new(sha2::Sha256::default()),
+        HashType::Sha1 => Box::new(sha1::Sha1::default()),
         HashType::Tiger => Box::new(tiger::Tiger::default()),
         HashType::Whirlpool => Box::new(whirlpool::Whirlpool::default()),
     }
