@@ -2,12 +2,12 @@ mod error;
 mod exec;
 mod hashing;
 
-use exec::{AuditSrc, OutFile, Queue, run};
+use exec::{Checker, OutFile, Queue, load_check_file, run};
 use std::{
     fmt::Display,
     fs,
     path::PathBuf,
-    sync::OnceLock,
+    sync::{OnceLock, mpsc},
     thread::{self},
 };
 
@@ -51,7 +51,7 @@ pub fn create(
     let result = thread::scope(|s| {
         let mut handles = Vec::with_capacity(max_threads as usize);
         while handles.len() < max_threads as usize {
-            handles.push(s.spawn(|| run(&hashes, &queue, empty_dirs, &outfile)));
+            handles.push(s.spawn(|| run(&hashes, &queue, empty_dirs, outfile.writer())));
         }
         handles
             .into_iter()
@@ -78,15 +78,20 @@ pub fn audit(
     early: bool,
     empty_dirs: bool,
 ) -> Result<(), Error> {
-    let (checkfile, hash, reader) = AuditSrc::new(hashes_file, early, empty_dirs)?;
+    let (reader, hashes) = load_check_file(hashes_file)?;
     let queue = Queue::new(input, recursive)?;
     let audit_err = thread::scope(|s| {
         let mut handles = Vec::with_capacity(max_threads as usize);
-        while handles.len() < max_threads as usize {
-            handles.push(s.spawn(|| run(&hash, &queue, empty_dirs, &checkfile)));
-        }
-        let mut checker = checkfile.checker(reader);
-        let audit_err = checker.check(&handles)?;
+        let mut checker = {
+            let (sender, receiver) = mpsc::channel();
+            let checker = Checker::new(reader, receiver, early, empty_dirs);
+            while handles.len() < max_threads as usize {
+                let sender = sender.clone();
+                handles.push(s.spawn(|| run(&hashes, &queue, empty_dirs, sender)));
+            }
+            checker
+        };
+        let audit_err = checker.check()?;
         let err = handles
             .into_iter()
             .map(|handle| handle.join().unwrap())

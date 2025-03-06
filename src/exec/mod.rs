@@ -13,7 +13,7 @@ use std::{
     },
 };
 
-pub use checker::AuditSrc;
+pub use checker::{Checker, load_check_file};
 pub use outfile::OutFile;
 
 const NO_DATE_STR: &str = "[NO DATE]";
@@ -87,7 +87,7 @@ pub fn run<T: HashHandler>(
     hashes: &[HashType],
     queue: &Queue,
     empty_dirs: bool,
-    handler: &T,
+    handler: T,
 ) -> Result<(), Error> {
     while let Some(path) = queue.pop_front() {
         if is_canceled() {

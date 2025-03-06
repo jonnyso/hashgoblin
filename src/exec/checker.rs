@@ -5,9 +5,7 @@ use std::{
     io::{BufRead, BufReader, Lines},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Mutex,
-    thread::{self, ScopedJoinHandle},
-    time::Duration,
+    sync::mpsc::{Receiver, Sender},
 };
 
 use jiff::civil::Date;
@@ -52,7 +50,7 @@ impl AuditError {
 
 type HashesFile = Lines<BufReader<File>>;
 
-fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, Vec<HashType>), Error> {
+pub fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, Vec<HashType>), Error> {
     verbose_print("loading check file", true);
     let path = path.unwrap_or(PathBuf::from(DEFAULT_OUT));
     let file = File::open(&path).map_err(|err| Error::Io((err, path_string(&path))))?;
@@ -150,60 +148,39 @@ enum ReaderErr {
     Audit(AuditError),
 }
 
-pub struct AuditSrc {
-    queue: Mutex<VecDeque<HashData>>,
-    early: bool,
-    empty_dirs: bool,
-}
-
-impl AuditSrc {
-    pub fn new(
-        path: Option<PathBuf>,
-        early: bool,
-        empty_dirs: bool,
-    ) -> Result<(Self, Vec<HashType>, HashesFile), Error> {
-        let (reader, hashes) = load_check_file(path)?;
-        let src = Self {
-            queue: Mutex::new(VecDeque::new()),
-            early,
-            empty_dirs,
-        };
-        Ok((src, hashes, reader))
-    }
-
-    pub fn checker(&self, reader: HashesFile) -> Checker {
-        Checker {
-            source: self,
-            reader,
-            backlog: VecDeque::with_capacity(100),
-            audit_err: false,
-        }
-    }
-
-    fn push_back(&self, hash_data: HashData) {
-        self.queue.lock().unwrap().push_back(hash_data);
-    }
-
-    fn pop_front(&self) -> Option<HashData> {
-        self.queue.lock().unwrap().pop_front()
-    }
-}
-
-impl HashHandler for AuditSrc {
+impl HashHandler for Sender<HashData> {
     fn handle(&self, hash_data: HashData) -> Result<(), Error> {
-        self.push_back(hash_data);
+        self.send(hash_data).unwrap();
         Ok(())
     }
 }
 
-pub struct Checker<'a> {
-    source: &'a AuditSrc,
+pub struct Checker {
+    source: Receiver<HashData>,
     reader: Lines<BufReader<File>>,
     backlog: VecDeque<HashData>,
     audit_err: bool,
+    early: bool,
+    empty_dirs: bool,
 }
 
-impl Checker<'_> {
+impl Checker {
+    pub fn new(
+        reader: HashesFile,
+        source: Receiver<HashData>,
+        early: bool,
+        empty_dirs: bool,
+    ) -> Self {
+        Self {
+            source,
+            reader,
+            backlog: VecDeque::with_capacity(100),
+            audit_err: false,
+            early,
+            empty_dirs,
+        }
+    }
+
     fn read_next(&mut self) -> Result<Option<HashData>, Error> {
         let next_line = match self.reader.next() {
             Some(result) => result.map_err(Error::ReadLine)?,
@@ -213,7 +190,7 @@ impl Checker<'_> {
             format!("reading next line from hashes file: {:?}", &next_line),
             true,
         );
-        HashData::try_from_string(next_line, self.source.empty_dirs).map(Some)
+        HashData::try_from_string(next_line, self.empty_dirs).map(Some)
     }
 
     fn search_backlog(&mut self, hd @ HashData(path, hash): &HashData) -> Result<bool, AuditError> {
@@ -293,7 +270,7 @@ impl Checker<'_> {
 
     fn search(&mut self) -> Result<(), Error> {
         verbose_print("begin search", true);
-        while let Some(hash_data) = self.source.pop_front() {
+        while let Ok(hash_data) = self.source.recv() {
             if is_canceled() {
                 return Ok(());
             }
@@ -303,7 +280,7 @@ impl Checker<'_> {
                     Ok(false) => (),
                     Err(err) => {
                         self.audit_err = true;
-                        err.print_and_cancel(self.source.early)
+                        err.print_and_cancel(self.early)
                     }
                 };
             }
@@ -313,17 +290,16 @@ impl Checker<'_> {
                     ReaderErr::Error(err) => cancel_on_err(Err(err))?,
                     ReaderErr::Audit(err) => {
                         self.audit_err = true;
-                        err.print_and_cancel(self.source.early);
+                        err.print_and_cancel(self.early);
                     }
                 },
                 None => {
                     self.audit_err = true;
-                    AuditError::Extra(path_string(&hash_data.0))
-                        .print_and_cancel(self.source.early);
+                    AuditError::Extra(path_string(&hash_data.0)).print_and_cancel(self.early);
                 }
             };
         }
-        Ok(())
+        self.flush_reader()
     }
 
     fn flush_reader(&mut self) -> Result<(), Error> {
@@ -333,30 +309,19 @@ impl Checker<'_> {
         Ok(())
     }
 
-    pub fn check(
-        &mut self,
-        handles: &[ScopedJoinHandle<Result<(), Error>>],
-    ) -> Result<bool, Error> {
-        loop {
-            self.search()?;
-            if handles.iter().any(|handle| !handle.is_finished()) {
-                verbose_print("queue empty, awaiting new data", true);
-                thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-            self.flush_reader()?;
-            if self.backlog.is_empty() {
-                verbose_print("search done, backlog is empty", true);
+    pub fn check(&mut self) -> Result<bool, Error> {
+        self.search()?;
+        if self.backlog.is_empty() {
+            verbose_print("search done, backlog is empty", true);
+            return Ok(self.audit_err);
+        }
+        verbose_print("search done, backlog not empty", true);
+        for HashData(path, _) in self.backlog.drain(..) {
+            if is_canceled() {
                 return Ok(self.audit_err);
             }
-            verbose_print("search done, backlog not empty", true);
-            for HashData(path, _) in self.backlog.drain(..) {
-                if is_canceled() {
-                    return Ok(self.audit_err);
-                }
-                AuditError::NotFound(path_string(&path)).print_and_cancel(self.source.early)
-            }
-            return Ok(true);
+            AuditError::NotFound(path_string(&path)).print_and_cancel(self.early)
         }
+        return Ok(true);
     }
 }

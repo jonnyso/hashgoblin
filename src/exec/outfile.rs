@@ -12,8 +12,10 @@ use super::{
     HASH_ALGO_STR, HashData, HashHandler, NO_DATE_STR, TIME_FINISH_STR, TIME_START_STR, VERSION_STR,
 };
 
+type GuardedWriter = Mutex<BufWriter<File>>;
+
 pub struct OutFile {
-    writer: Mutex<BufWriter<File>>,
+    writer: GuardedWriter,
 }
 
 impl OutFile {
@@ -40,6 +42,10 @@ impl OutFile {
         Ok(Self {
             writer: Mutex::new(writer),
         })
+    }
+
+    pub fn writer(&self) -> &GuardedWriter {
+        &self.writer
     }
 
     pub fn finish(self) -> Result<(), Error> {
@@ -78,10 +84,9 @@ impl OutFile {
     }
 }
 
-impl HashHandler for OutFile {
+impl HashHandler for &GuardedWriter {
     fn handle(&self, hash_data: HashData) -> Result<(), Error> {
-        self.writer
-            .lock()
+        self.lock()
             .unwrap()
             .write_all(format!("{hash_data}\n").as_bytes())
             .map_err(Error::OutputWrite)
