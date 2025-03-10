@@ -103,7 +103,7 @@ pub fn run<T: HashHandler>(
             verbose_print(format!("hashing file: {:?}", &path), true);
             let mut hash_data = HashData::new(path);
             for hash in hashes {
-                let mut hasher = hashing::new_hasher(&hash);
+                let mut hasher = hashing::new_hasher(hash);
                 let hash = match hashing::hash_file(hash_data.path(), &mut *hasher) {
                     Ok(Hashed::Value(value)) => Ok(value),
                     Ok(Hashed::Canceled) => return Ok(()),

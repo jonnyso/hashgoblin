@@ -322,6 +322,6 @@ impl Checker {
             }
             AuditError::NotFound(path_string(&path)).print_and_cancel(self.early)
         }
-        return Ok(true);
+        Ok(true)
     }
 }
