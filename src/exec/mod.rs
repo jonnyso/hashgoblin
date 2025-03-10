@@ -26,7 +26,7 @@ static CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub fn cancel() {
     CANCEL.store(true, Ordering::Release);
-    verbose_print("CANCELED", true);
+    verbose_print(|| "CANCELED", true);
 }
 
 pub fn is_canceled() -> bool {
@@ -94,13 +94,13 @@ pub fn run<T: HashHandler>(
             return Ok(());
         }
         if path.is_dir() {
-            verbose_print(format!("hashing: reading dir {:?}", &path), true);
+            verbose_print(|| format!("hashing: reading dir {:?}", &path), true);
             let is_empty = cancel_on_err(queue.push_dir(&path))?;
             if is_empty && empty_dirs {
                 cancel_on_err(handler.handle(HashData(path, None)))?;
             }
         } else {
-            verbose_print(format!("hashing file: {:?}", &path), true);
+            verbose_print(|| format!("hashing file: {:?}", &path), true);
             let mut hash_data = HashData::new(path);
             for hash in hashes {
                 let mut hasher = hashing::new_hasher(hash);

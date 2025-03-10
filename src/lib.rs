@@ -22,14 +22,18 @@ pub fn verbose_init(value: bool) {
     VERBOSE.set(value).expect("OnceLock cell should be empty");
 }
 
-pub fn verbose_print<M: Display>(message: M, is_verbose: bool) {
+pub fn verbose_print<F, M>(message: F, is_verbose: bool)
+where
+    M: Display,
+    F: FnOnce() -> M,
+{
     let verbose = *VERBOSE.get().unwrap();
     if verbose || !is_verbose {
         if verbose {
             let thread_id = thread::current().id();
-            println!("{:?}: {message}", thread_id);
+            println!("{:?}: {}", thread_id, message());
         } else {
-            println!("{message}");
+            println!("{}", message());
         }
     }
 }

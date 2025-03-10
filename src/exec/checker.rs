@@ -41,7 +41,7 @@ impl Display for AuditError {
 
 impl AuditError {
     fn print_and_cancel(&self, early: bool) {
-        verbose_print(self, false);
+        verbose_print(|| self, false);
         if early {
             cancel();
         }
@@ -51,7 +51,7 @@ impl AuditError {
 type HashesFile = Lines<BufReader<File>>;
 
 pub fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, Vec<HashType>), Error> {
-    verbose_print("loading check file", true);
+    verbose_print(|| "loading check file", true);
     let path = path.unwrap_or(PathBuf::from(DEFAULT_OUT));
     let file = File::open(&path).map_err(|err| Error::Io((err, path_string(&path))))?;
     let mut lines = BufReader::new(file).lines();
@@ -115,7 +115,7 @@ enum ComparedPath {
 
 fn compare_paths(reader_path: &Path, path: &Path) -> Result<(), ComparedPath> {
     verbose_print(
-        format!("comparing path {:?} to {:?}", reader_path, path),
+        || format!("comparing path {:?} to {:?}", reader_path, path),
         true,
     );
     if reader_path == path {
@@ -187,14 +187,14 @@ impl Checker {
             None => return Ok(None),
         };
         verbose_print(
-            format!("reading next line from hashes file: {:?}", &next_line),
+            || format!("reading next line from hashes file: {:?}", &next_line),
             true,
         );
         HashData::try_from_string(next_line, self.empty_dirs).map(Some)
     }
 
     fn search_backlog(&mut self, hd @ HashData(path, hash): &HashData) -> Result<bool, AuditError> {
-        verbose_print(format!("searching {hd} in backlog"), true);
+        verbose_print(|| format!("searching {hd} in backlog"), true);
         let len = self.backlog.len();
         for _ in 0..len {
             if is_canceled() {
@@ -203,7 +203,7 @@ impl Checker {
             if let Some(HashData(list_path, list_hash)) = self.backlog.pop_front() {
                 match compare_paths(&list_path, path) {
                     Ok(_) => {
-                        verbose_print(format!("found {hd} in backlog"), true);
+                        verbose_print(|| format!("found {hd} in backlog"), true);
                         return if &list_hash == hash {
                             Ok(true)
                         } else {
@@ -211,7 +211,7 @@ impl Checker {
                         };
                     }
                     Err(ComparedPath::Unrelated) => {
-                        verbose_print(format!("pushing {hd} to backlog"), true);
+                        verbose_print(|| format!("pushing {hd} to backlog"), true);
                         self.backlog.push_back(HashData(list_path, list_hash));
                         continue;
                     }
@@ -231,7 +231,7 @@ impl Checker {
         &mut self,
         hd @ HashData(path, hash): &HashData,
     ) -> Option<Result<(), ReaderErr>> {
-        verbose_print(format!("searching {hd} on hashes file"), true);
+        verbose_print(|| format!("searching {hd} on hashes file"), true);
         loop {
             if is_canceled() {
                 return Some(Ok(()));
@@ -242,7 +242,7 @@ impl Checker {
                 Ok(Some(HashData(reader_path, reader_hash))) => {
                     match compare_paths(&reader_path, path) {
                         Ok(_) => {
-                            verbose_print(format!("found {hd} in hashes file"), true);
+                            verbose_print(|| format!("found {hd} in hashes file"), true);
                             if &reader_hash == hash {
                                 Some(Ok(()))
                             } else {
@@ -252,7 +252,7 @@ impl Checker {
                             }
                         }
                         Err(ComparedPath::Unrelated) => {
-                            verbose_print(format!("pushing {hd} to backlog"), true);
+                            verbose_print(|| format!("pushing {hd} to backlog"), true);
                             self.backlog.push_back(HashData(reader_path, reader_hash));
                             continue;
                         }
@@ -269,7 +269,7 @@ impl Checker {
     }
 
     fn search(&mut self) -> Result<(), Error> {
-        verbose_print("begin search", true);
+        verbose_print(|| "begin search", true);
         while let Ok(hash_data) = self.source.recv() {
             if is_canceled() {
                 return Ok(());
@@ -312,10 +312,10 @@ impl Checker {
     pub fn check(&mut self) -> Result<bool, Error> {
         self.search()?;
         if self.backlog.is_empty() {
-            verbose_print("search done, backlog is empty", true);
+            verbose_print(|| "search done, backlog is empty", true);
             return Ok(self.audit_err);
         }
-        verbose_print("search done, backlog not empty", true);
+        verbose_print(|| "search done, backlog not empty", true);
         for HashData(path, _) in self.backlog.drain(..) {
             if is_canceled() {
                 return Ok(self.audit_err);
