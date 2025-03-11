@@ -58,7 +58,7 @@ pub fn load_check_file(path: Option<PathBuf>) -> Result<(HashesFile, Vec<HashTyp
     match lines.next() {
         None => return Err(Error::FileFormat),
         Some(Err(err)) => return Err(Error::ReadLine(err)),
-        Some(Ok(line)) => match line.split_once(char::is_whitespace) {
+        Some(Ok(line)) => match line.rsplit_once(char::is_whitespace) {
             Some((VERSION_STR, version)) => {
                 let current = env!("CARGO_PKG_VERSION");
                 if current != version {

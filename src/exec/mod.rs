@@ -19,7 +19,7 @@ pub use outfile::OutFile;
 const NO_DATE_STR: &str = "[NO DATE]";
 const TIME_START_STR: &str = "time_start";
 const TIME_FINISH_STR: &str = "time_finish";
-const VERSION_STR: &str = "version";
+const VERSION_STR: &str = concat!(env!("CARGO_PKG_NAME"), " - version");
 const HASH_ALGO_STR: &str = "algo";
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
